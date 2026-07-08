@@ -95,3 +95,11 @@ home_assistant:
 
 database:
   path: "data/juggle.db"
+
+thermal:
+  # Pause processing when the CPU package gets too hot, so an old laptop doesn't
+  # thermal-throttle mid-clip or overheat. Ivy Bridge throttles near ~100C.
+  enabled: true
+  max_temp_c: 90        # pause the worker above this CPU package temp
+  resume_temp_c: 80     # resume once it cools back to here
+  poll_seconds: 5       # how often to re-check while paused

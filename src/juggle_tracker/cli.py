@@ -6,6 +6,7 @@
     python -m juggle_tracker.cli scores                   # print the scoreboard
     python -m juggle_tracker.cli record  --seconds 30     # grab a clip from RTSP
     python -m juggle_tracker.cli doctor                   # preflight env checks
+    python -m juggle_tracker.cli bench                     # model FPS + per-clip estimate
 """
 from __future__ import annotations
 
@@ -185,6 +186,60 @@ def _record(args) -> int:
     return 0
 
 
+def _bench(args) -> int:
+    """Micro-benchmark the model stack to estimate real per-clip processing time."""
+    import numpy as np
+    from .detect import Detector
+    from .pose import PoseEstimator
+    from .thermal import read_package_temp_c
+
+    cfg = load_config(args.config)
+    size = int(cfg.processing.get("infer_long_edge", 640))
+    iters = args.iters
+    img = (np.random.rand(size, size, 3) * 255).astype("uint8")
+
+    print(f"Benchmarking at {size}px, {iters} iters "
+          f"(threads={cfg.processing.get('torch_threads', 0)})...")
+    det = Detector(
+        cfg.models.detector,
+        person_conf=float(cfg.models.get("person_conf", 0.35)),
+        ball_conf=float(cfg.models.get("ball_conf", 0.20)),
+        torch_threads=int(cfg.processing.get("torch_threads", 0)),
+    )
+    pose = PoseEstimator(cfg.models.pose)
+
+    def timeit(fn, n):
+        for _ in range(2):      # warmup
+            fn()
+        t0 = time.time()
+        for _ in range(n):
+            fn()
+        return n / (time.time() - t0)
+
+    det_fps = timeit(lambda: det.detect_track(img), iters)
+    pose_fps = timeit(lambda: pose.estimate(img), iters)
+
+    fps = float(cfg.camera.get("fps", 25))
+    stride = max(1, int(cfg.processing.get("person_stride", 4)))
+    clip_s = int(cfg.capture.get("clip_seconds", 20))
+    frames = int(fps * clip_s)
+    # ball detect runs every frame; pose runs every stride-th frame.
+    est_s = frames / det_fps + (frames / stride) / pose_fps
+
+    print("\nResults (higher FPS = faster):")
+    print(f"  detector (person+ball): {det_fps:5.1f} FPS")
+    print(f"  pose (17 keypoints):    {pose_fps:5.1f} FPS")
+    temp = read_package_temp_c()
+    if temp is not None:
+        print(f"  CPU package temp:       {temp:.0f} C")
+    print(f"\nEstimated processing time for a {clip_s}s clip "
+          f"({frames} frames @ {fps:.0f}fps, stride {stride}):")
+    print(f"  ~{est_s:.0f}s  ({est_s / clip_s:.1f}x realtime)")
+    print("\nTune: lower infer_long_edge or raise person_stride to speed up; "
+          "watch accuracy with tools/eval.py.")
+    return 0
+
+
 # --- doctor / preflight --------------------------------------------------
 _PASS, _WARN, _FAIL = "PASS", "WARN", "FAIL"
 _SYM = {_PASS: "\u2713", _WARN: "!", _FAIL: "\u2717"}
@@ -350,6 +405,10 @@ def main(argv=None) -> int:
 
     pd = sub.add_parser("doctor", help="Preflight: check ffmpeg, RTSP, MQTT, models, webcam")
     pd.set_defaults(func=_doctor)
+
+    pb = sub.add_parser("bench", help="Benchmark model FPS + estimate per-clip time")
+    pb.add_argument("--iters", type=int, default=20)
+    pb.set_defaults(func=_bench)
 
     args = p.parse_args(argv)
     return args.func(args)

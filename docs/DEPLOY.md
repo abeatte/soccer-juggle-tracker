@@ -163,7 +163,14 @@ these hardware-specific realities:
   real win (see `tools/eval.py`), or after moving to AVX2+ hardware.
 - **Thermals:** sustained load will spin the fans and may throttle a 13-year-old
   laptop. The systemd unit runs the worker at `Nice=10` + idle IO + `CPUQuota` so
-  HA/Matter stay responsive; leave the machine ventilated.
+  HA/Matter stay responsive; leave the machine ventilated. A built-in **thermal
+  guard** (config `thermal:`) pauses processing above `max_temp_c` (default 90 C)
+  and resumes at `resume_temp_c` (80 C) so the box never cooks or throttles
+  mid-clip.
+- **Measure real speed:** after `./setup.sh`, run `python -m juggle_tracker.cli
+  bench` — it reports detector/pose FPS at your `infer_long_edge` and estimates
+  per-clip processing time, so you can dial `infer_long_edge`/`person_stride`
+  against the actual numbers before wiring up the camera.
 
 Recommended `config.yaml` (already the defaults in `config.example.yaml`):
 

@@ -28,6 +28,7 @@ from .ha_mqtt import HAPublisher
 from .identity import (FaceEngine, Gallery, IdentityResolver, assign_face_to_track)
 from .juggle import JuggleCounter
 from .pose import PoseEstimator, person_center
+from .thermal import ThermalGuard
 
 
 @dataclass
@@ -99,6 +100,12 @@ class Pipeline:
                 vote_min_frames=int(cfg.identity.get("vote_min_frames", 3)),
             )
         self.ha = HAPublisher(cfg)
+        self.thermal = ThermalGuard.from_config(
+            cfg.raw,
+            on_pause=lambda t: print(
+                f"  [thermal] {t:.0f}C >= limit; pausing to cool...", flush=True
+            ),
+        )
 
     # ------------------------------------------------------------------
     def process(self, clip_path: str, debug_video: Optional[str] = None) -> ClipResult:
@@ -122,6 +129,9 @@ class Pipeline:
             n_frames += 1
             img = frame.image
             h, w = img.shape[:2]
+            # Thermal safety: check every ~2s of video and block if overheating.
+            if frame.index % 50 == 0:
+                self.thermal.maybe_wait()
             if counter is None:
                 counter = JuggleCounter(
                     frame_height=h,
