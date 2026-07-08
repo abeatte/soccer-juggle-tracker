@@ -1,5 +1,14 @@
 # Soccer Juggle Tracker — configuration.
 # Copy to config.yaml and edit. config.yaml is gitignored (holds credentials).
+#
+# ┌───────────────────────────────────────────────────────────────────────┐
+# │ LOW-POWER PROFILE — Intel i7-3740QM (Ivy Bridge, 2012, NO AVX2)        │
+# │ The confirmed target CPU has no AVX2/FMA, so ML kernels are slow and    │
+# │ OpenVINO gives little benefit. The values below already reflect this   │
+# │ profile (infer_long_edge=640, person_stride=4, torch_threads=4, 20s    │
+# │ clips, .pt models — not OpenVINO). RAM (15GB) is not a constraint.      │
+# │ Expect ~2-5 min to process a 20-30s clip. See docs/DEPLOY.md.          │
+# └───────────────────────────────────────────────────────────────────────┘
 
 camera:
   # Reolink RLC-810A RTSP. The RLC-810A exposes two streams:
@@ -10,32 +19,34 @@ camera:
   fps: 25                # source framerate of recorded clips
 
 capture:
-  clip_seconds: 30       # length of a motion-triggered clip
+  clip_seconds: 20       # length of a motion-triggered clip (short = faster turnaround)
   inbox_dir: "inbox"     # new clips land here (from HA/Reolink or manual copy)
   processed_dir: "processed"   # clips are moved here after analysis
 
 # Region of interest in the frame, as fractions [0-1]: x0,y0,x1,y1.
 # Crop to just the play area to cut CPU cost and false detections.
+# On this slow CPU a tight ROI is one of the biggest speed wins.
 # Full frame = [0.0, 0.0, 1.0, 1.0].
 roi: [0.0, 0.0, 1.0, 1.0]
 
 processing:
   # Analysis resolution (long edge, px). Smaller = faster, less accurate.
-  # 960 is a good CPU compromise for a 4K source on the 2016 MBP.
-  infer_long_edge: 960
+  # 640 suits the Ivy-Bridge CPU; bump to 960 only if you later get AVX2 hardware.
+  infer_long_edge: 640
   # Run person-detect + pose every Nth frame (interpolate tracks between).
   # The BALL is always detected every frame — it's the fast-moving object.
-  person_stride: 3
-  # Cap CPU cores so Home Assistant / Matter stay responsive. 0 = auto (leave 2 free).
-  torch_threads: 0
+  person_stride: 4
+  # Cap CPU threads so Home Assistant / Matter stay responsive. This box has 8
+  # threads; 4 leaves half for HA/Matter. 0 = auto (leave 2 free).
+  torch_threads: 4
 
 models:
   # Ultralytics weights (downloaded by setup.sh into ./models).
-  # Ultralytics auto-detects the format from the path. For a big speedup on this
-  # Intel CPU, export to OpenVINO once (python tools/export_openvino.py) and then
-  # point these at the exported dirs instead of the .pt files:
-  #   detector: "models/yolo11n_openvino_model"
-  #   pose:     "models/yolo11n-pose_openvino_model"
+  # Ultralytics auto-detects the format from the path.
+  # NOTE: OpenVINO acceleration needs AVX2 to be worthwhile. On this Ivy-Bridge
+  # (no-AVX2) box, stick with the .pt weights below. Only switch to exported
+  # OpenVINO dirs (models/*_openvino_model) if a benchmark actually shows a win,
+  # or after moving to AVX2+ hardware. See docs/DEPLOY.md.
   detector: "models/yolo11n.pt"        # person + sports ball (COCO)
   pose: "models/yolo11n-pose.pt"       # 17-keypoint pose
   # InsightFace model pack for face embeddings (auto-downloaded on first use).

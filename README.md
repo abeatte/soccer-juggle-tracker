@@ -17,9 +17,11 @@ Home Assistant and Matter in Docker. That box has **no GPU** usable for ML
 2–5 FPS for this model stack. Juggling is far too fast to count accurately at
 that framerate in real time — the ball reverses in 2–3 frames.
 
-> Because it's an **Intel** CPU on Linux, we recover a lot of that speed with
-> **OpenVINO** (Intel's inference runtime), commonly ~2–3x over stock torch-CPU.
-> See [`docs/DEPLOY.md`](docs/DEPLOY.md). Even so, batch keeps accuracy guaranteed.
+> Because it's an **Intel** CPU on Linux, OpenVINO (Intel's inference runtime)
+> can recover much of that speed (commonly ~2–3x) — **but only where AVX2 is
+> available**. The confirmed target here is a 2012 i7-3740QM (Ivy Bridge, **no
+> AVX2**), so it runs the `.pt` models under a low-power profile instead; see
+> [`docs/DEPLOY.md`](docs/DEPLOY.md). Either way, batch keeps accuracy guaranteed.
 
 So the design **decouples capture from compute**:
 

@@ -28,12 +28,14 @@ else warn "os/arch" "$OS ($ARCH) — expected x86_64; OpenVINO wheels target x86
 
 # --- CPU cores + AVX (OpenVINO speed) ------------------------------------
 CORES=$(nproc 2>/dev/null || echo '?')
+MODEL=$(grep -m1 'model name' /proc/cpuinfo 2>/dev/null | cut -d: -f2- | sed 's/^ *//')
+[ -n "$MODEL" ] && printf '      cpu model: %s\n' "$MODEL"
 if grep -qm1 avx2 /proc/cpuinfo 2>/dev/null; then
-  pass "cpu" "$CORES cores, AVX2 present (OpenVINO will accelerate well)"
+  pass "cpu" "$CORES threads, AVX2 present (OpenVINO will accelerate well)"
 elif grep -qm1 avx /proc/cpuinfo 2>/dev/null; then
-  warn "cpu" "$CORES cores, AVX only (OpenVINO ok, less speedup)"
+  warn "cpu" "$CORES threads, AVX only (no AVX2) — use the low-power profile; skip OpenVINO"
 else
-  warn "cpu" "$CORES cores, no AVX detected (OpenVINO will be slow)"
+  warn "cpu" "$CORES threads, no AVX detected (very slow; use lightest settings)"
 fi
 
 # --- RAM ------------------------------------------------------------------

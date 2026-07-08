@@ -133,9 +133,41 @@ models:
 Re-run `python tools/eval.py ground_truth.csv` to confirm accuracy held (INT8 in
 particular can nick small/blurry-ball recall — check before keeping it).
 
+## Low-power profile — Intel i7-3740QM (Ivy Bridge, 2012, no AVX2)
+
+The confirmed target is a **mid-2012 MacBook Pro** (i7-3740QM, 4c/8t, **no
+AVX2/FMA**, 15 GB RAM, bare metal). It works well for this batch pipeline, with
+these hardware-specific realities:
+
+- **RAM is not a constraint** (15 GB; models + torch need ~1–2 GB).
+- **CPU is the limit.** Expect ~1–3 analysis FPS, so a 20–30 s clip takes roughly
+  **2–5 minutes** to process. Fine for delayed scoring; not real-time.
+- **OpenVINO gives little here** — its speedup depends on AVX2. Keep the `.pt`
+  models; only switch to exported OpenVINO dirs if a benchmark on this box shows a
+  real win (see `tools/eval.py`), or after moving to AVX2+ hardware.
+- **Thermals:** sustained load will spin the fans and may throttle a 13-year-old
+  laptop. The systemd unit runs the worker at `Nice=10` + idle IO + `CPUQuota` so
+  HA/Matter stay responsive; leave the machine ventilated.
+
+Recommended `config.yaml` (already the defaults in `config.example.yaml`):
+
+```yaml
+capture:    { clip_seconds: 20 }
+processing: { infer_long_edge: 640, person_stride: 4, torch_threads: 4 }
+roi:        [ ... tight crop around the play area ... ]   # big win on slow CPU
+models:     # keep the .pt weights (NOT OpenVINO) on this no-AVX2 CPU
+  detector: "models/yolo11n.pt"
+  pose:     "models/yolo11n-pose.pt"
+```
+
+If you outgrow the ~minutes-per-clip latency, the clean upgrade is a small
+dedicated box — an **Apple Silicon Mac Mini** (MPS) or **NVIDIA Jetson Orin**
+— where the realtime pipeline and a containerized, GPU-accelerated build become
+attractive; keep this 2012 box as the HA/Matter hub.
+
 ## Recommendation
 
-Run **native + systemd + OpenVINO** on the MacBook now — least overhead on weak
-hardware, and it's ready to go. Switch to **Docker** if you later want unified
-compose management or move the workload to a dedicated Apple Silicon Mac Mini /
-Jetson, where a containerized (and GPU-accelerated) build becomes attractive.
+Run **native + systemd** on the MacBook now — least overhead on weak hardware,
+and it's ready to go. Use the **low-power profile** above (it's the default).
+Switch to **Docker** if you later want unified compose management, and revisit
+**OpenVINO / GPU** only on AVX2+ or dedicated hardware.
