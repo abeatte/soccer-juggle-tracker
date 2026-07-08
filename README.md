@@ -88,8 +88,29 @@ clip.mp4 ─▶ capture ─▶ detect (person + ball)  ┐
 - [ ] Accuracy tuning against your real footage (the multi-week part — needs sample clips)
 - [ ] Auto motion-trigger wiring from HA/Reolink to the clip inbox
 
-See [`docs/SETUP.md`](docs/SETUP.md) for full setup and
-[`docs/HOME_ASSISTANT.md`](docs/HOME_ASSISTANT.md) for the HA side.
+## Docs
+
+- [`docs/SETUP.md`](docs/SETUP.md) — install, configure, enroll, run
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — why batch, the frame pipeline, the juggle state machine
+- [`docs/HOME_ASSISTANT.md`](docs/HOME_ASSISTANT.md) — MQTT discovery, dashboard, automations
+- [`docs/TUNING.md`](docs/TUNING.md) — first-clip calibration + ongoing regression tuning
+
+## Auto-run + Home Assistant wiring
+
+- **Run the worker as a background service** (macOS launchd, low CPU priority so
+  HA/Matter stay responsive):
+  ```bash
+  deploy/install-launchd.sh            # install + start
+  deploy/install-launchd.sh uninstall  # stop + remove
+  ```
+- **Home Assistant package** with the extra sensors + automations (new-high-score
+  TTS, auto-record clips on person detection, nightly leaderboard):
+  copy [`homeassistant/packages/juggle_tracker.yaml`](homeassistant/packages/juggle_tracker.yaml)
+  into `<config>/packages/`. The per-person high-score sensors themselves appear
+  automatically via MQTT discovery.
+- **Measure accuracy over time**: `python tools/eval.py ground_truth.csv` scores a
+  labelled clip set against your hand counts (sandboxed — never touches real
+  scores). See [`docs/TUNING.md`](docs/TUNING.md).
 
 ## License
 

@@ -25,7 +25,12 @@ models/*.onnx
 
 # Debug output
 out*.mp4
+dbg/
+*.dbg.mp4
 *.log
+
+# Tuning: keep ground_truth.csv (filenames+numbers, no PII); ignore the clips.
+clips/
 
 # OS
 .DS_Store

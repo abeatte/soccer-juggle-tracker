@@ -1,0 +1,119 @@
+# Home Assistant package: Soccer Juggle Tracker
+# ---------------------------------------------------------------------------
+# Drop this file in <config>/packages/juggle_tracker.yaml and enable packages
+# once in configuration.yaml:
+#
+#   homeassistant:
+#     packages: !include_dir_named packages
+#
+# Then restart HA. NOTE: the per-person high-score sensors
+# (sensor.<kid>_juggle_high_score) are created AUTOMATICALLY by the tracker via
+# MQTT discovery on the first processed clip — you do NOT declare them here.
+# This package adds the extra sensors + automations around them.
+#
+# Replace the CHANGE_ME placeholders (camera entity, person binary_sensor,
+# media_player, notify service) with your actual entity IDs.
+# ---------------------------------------------------------------------------
+
+mqtt:
+  sensor:
+    # Summary of the most recently processed clip (retained topic).
+    - name: "Juggle Last Session"
+      unique_id: juggle_tracker_last_session
+      state_topic: "juggle_tracker/last_session"
+      value_template: >-
+        {{ (value_json.results | length) if value_json.results is defined else 0 }}
+      unit_of_measurement: "streaks"
+      icon: mdi:soccer
+      json_attributes_topic: "juggle_tracker/last_session"
+      # attributes: ts, results[] ({person,count,reason,start_frame,end_frame})
+
+template:
+  - sensor:
+      # Best streak from the most recent session, and who did it.
+      - name: "Juggle Last Session Best"
+        unique_id: juggle_last_session_best
+        unit_of_measurement: "juggles"
+        icon: mdi:trophy-outline
+        state: >-
+          {% set r = state_attr('sensor.juggle_last_session','results') or [] %}
+          {{ (r | map(attribute='count') | max) if r | length > 0 else 0 }}
+      - name: "Juggle Last Session Best Player"
+        unique_id: juggle_last_session_best_player
+        icon: mdi:account-star
+        state: >-
+          {% set r = state_attr('sensor.juggle_last_session','results') or [] %}
+          {% if r | length > 0 %}
+            {% set top = r | sort(attribute='count', reverse=true) | first %}
+            {{ top.person }}
+          {% else %}unknown{% endif %}
+
+automation:
+  # 1) Announce a new personal record (fires a few minutes after the session,
+  #    since processing is batch/offline).
+  - id: juggle_new_high_score_announce
+    alias: "Juggle: announce new high score"
+    trigger:
+      - platform: mqtt
+        topic: "juggle_tracker/event/new_high_score"
+    variables:
+      person: "{{ trigger.payload_json.person }}"
+      score: "{{ trigger.payload_json.score }}"
+    action:
+      # Speak it (swap for your TTS engine / speaker).
+      - service: tts.google_translate_say   # CHANGE_ME
+        data:
+          entity_id: media_player.kitchen_speaker   # CHANGE_ME
+          message: "New juggling record! {{ person }} just hit {{ score }} juggles."
+      # And push a phone notification.
+      - service: notify.mobile_app_phone   # CHANGE_ME
+        data:
+          title: "⚽ New juggle record!"
+          message: "{{ person }} set a new personal best: {{ score }} juggles."
+    mode: queued
+
+  # 2) Auto-record a yard clip when the camera detects a person, writing it into
+  #    the tracker's inbox/ (same folder on this MacBook). The batch worker picks
+  #    it up automatically.
+  - id: juggle_record_on_person
+    alias: "Juggle: record clip on person detected"
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.front_yard_person   # CHANGE_ME (RLC-810A person sensor)
+        to: "on"
+    # Don't spam: skip if we recorded in the last 2 minutes.
+    condition:
+      - condition: template
+        value_template: >-
+          {{ (now() - (state_attr('automation.juggle_record_on_person','last_triggered')
+             or (now() - timedelta(minutes=5)))).total_seconds() > 120 }}
+    action:
+      - service: camera.record
+        target:
+          entity_id: camera.front_yard   # CHANGE_ME (main/clear stream preferred)
+        data:
+          duration: 30
+          lookback: 4
+          # Point this at the SAME directory as the tracker's capture.inbox_dir
+          # (a shared bind-mount / symlink between the HA container and the host).
+          filename: "/media/juggle_inbox/clip_{{ now().strftime('%Y%m%d_%H%M%S') }}.mp4"
+    mode: single
+
+  # 3) Optional: nightly leaderboard summary notification.
+  - id: juggle_nightly_leaderboard
+    alias: "Juggle: nightly leaderboard"
+    trigger:
+      - platform: time
+        at: "20:30:00"
+    action:
+      - service: notify.mobile_app_phone   # CHANGE_ME
+        data:
+          title: "⚽ Juggle leaderboard"
+          message: >-
+            {% set kids = states.sensor
+               | selectattr('entity_id','search','_juggle_high_score')
+               | sort(attribute='state', reverse=true) | list %}
+            {% if kids | length == 0 %}No scores yet.{% else %}
+            {%- for k in kids %}{{ k.attributes.friendly_name | replace(' Juggle High Score','') }}: {{ k.state }}{{ '\n' if not loop.last }}{% endfor %}
+            {% endif %}
+    mode: single
