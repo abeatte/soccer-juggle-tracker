@@ -9,21 +9,44 @@ cd "$(dirname "$0")"
 # System prerequisites (Ubuntu): python venv + ffmpeg.
 if command -v apt-get >/dev/null 2>&1; then
   if ! command -v ffmpeg >/dev/null 2>&1 || ! python3 -m venv --help >/dev/null 2>&1; then
-    echo "==> Installing system prerequisites (sudo apt-get: ffmpeg, python3-venv)"
+    echo "==> Installing system prerequisites (sudo apt-get: ffmpeg, python venv)"
     sudo apt-get update -qq
     sudo apt-get install -y -qq ffmpeg python3-venv python3-pip libgl1 libglib2.0-0
   fi
 fi
 
+# The ML stack (torch/ultralytics/onnxruntime/insightface/openvino) only has
+# wheels for Python 3.10-3.12. A too-new system Python (e.g. 3.13/3.14) will make
+# pip fail to resolve. Pick a compatible interpreter for the venv.
+pick_python() {
+  for p in python3.12 python3.11 python3.10; do
+    command -v "$p" >/dev/null 2>&1 && { echo "$p"; return; }
+  done
+  # Fall back to python3 only if it's within the supported range.
+  local v
+  v=$(python3 -c 'import sys;print("%d%02d"%sys.version_info[:2])' 2>/dev/null || echo 0)
+  if [ "$v" -ge 310 ] && [ "$v" -le 312 ]; then echo python3; fi
+}
+PYBIN="$(pick_python)"
+if [ -z "$PYBIN" ]; then
+  echo "ERROR: No compatible Python (3.10-3.12) found; system python3 is $(python3 -V 2>&1)."
+  echo "       The ML deps have no wheels for 3.13+/very-new versions. Install one, e.g.:"
+  echo "         sudo add-apt-repository -y ppa:deadsnakes/ppa && sudo apt-get update"
+  echo "         sudo apt-get install -y python3.12 python3.12-venv"
+  echo "       Or use uv/pyenv to provide python3.12, then re-run ./setup.sh."
+  exit 1
+fi
+echo "==> Using interpreter: $PYBIN ($($PYBIN -V 2>&1))"
+
 echo "==> Creating virtualenv (.venv)"
-python3 -m venv .venv
+"$PYBIN" -m venv .venv
 # shellcheck disable=SC1091
 source .venv/bin/activate
 
 echo "==> Upgrading pip"
 pip install --quiet --upgrade pip
 
-echo "==> Installing requirements (CPU-only torch on Intel macOS)"
+echo "==> Installing requirements (CPU-only torch on Linux x86_64)"
 pip install --quiet -r requirements.txt
 
 echo "==> Downloading YOLO model weights into ./models"
