@@ -49,6 +49,9 @@ pip install --quiet --upgrade pip
 echo "==> Installing requirements (CPU-only torch on Linux x86_64)"
 pip install --quiet -r requirements.txt
 
+echo "==> Installing the juggle_tracker package (editable)"
+pip install --quiet -e .
+
 echo "==> Downloading YOLO model weights into ./models"
 mkdir -p models
 python - <<'PY'
@@ -78,7 +81,12 @@ if [[ "${1:-}" == "--openvino" ]]; then
 fi
 
 echo ""
+echo "==> Benchmarking the model stack on this hardware (per-clip time estimate)"
+python -m juggle_tracker.cli bench || echo "  (bench skipped/failed; run it manually later)"
+
+echo ""
 echo "Setup complete. Next:"
 echo "  cp config.example.yaml config.yaml   # then edit RTSP + MQTT"
 echo "  source .venv/bin/activate"
+echo "  python -m juggle_tracker.cli doctor  # preflight checks"
 echo "  python -m juggle_tracker.cli enroll --name \"Kid1\""
