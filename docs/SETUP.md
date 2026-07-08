@@ -44,6 +44,19 @@ Set at minimum:
 
 `config.yaml` is gitignored (it holds credentials).
 
+### Preflight check
+
+Verify the environment before enrolling/processing:
+
+```bash
+source .venv/bin/activate
+python -m juggle_tracker.cli doctor
+```
+
+It checks ffmpeg, model weights, RTSP reachability, the MQTT broker, `inbox/`
+permissions, and `/dev/video0`. Resolve any ✗ FAIL items (warnings are
+non-blocking).
+
 ## 3. Enroll your known people (max 4)
 
 Best results: a folder of 10–20 face photos per kid (varied angle/distance/light).

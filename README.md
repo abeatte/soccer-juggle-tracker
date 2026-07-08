@@ -45,6 +45,9 @@ cropped region of interest. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 cp config.example.yaml config.yaml
 $EDITOR config.yaml
 
+# 2b. Preflight: verify ffmpeg, models, RTSP, MQTT, inbox, webcam
+python -m juggle_tracker.cli doctor
+
 # 3. Enroll your known people (one-time; ~10-20 face shots each)
 source .venv/bin/activate
 python -m juggle_tracker.cli enroll --name "Kid1"
@@ -82,6 +85,10 @@ clip.mp4 ─▶ capture ─▶ detect (person + ball)  ┐
 | DB | `src/juggle_tracker/db.py` | People, sessions, high scores (SQLite) |
 | HA/MQTT | `src/juggle_tracker/ha_mqtt.py` | MQTT discovery + state publish |
 | Pipeline | `src/juggle_tracker/pipeline.py` | Orchestrate a clip end-to-end |
+
+Run `python -m juggle_tracker.cli doctor` any time to check the environment
+(ffmpeg, model weights, RTSP reachability, MQTT broker, inbox permissions,
+`/dev/video0`).
 
 ## Status / roadmap
 

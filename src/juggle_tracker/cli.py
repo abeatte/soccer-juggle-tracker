@@ -5,6 +5,7 @@
     python -m juggle_tracker.cli watch                    # batch worker: watch inbox
     python -m juggle_tracker.cli scores                   # print the scoreboard
     python -m juggle_tracker.cli record  --seconds 30     # grab a clip from RTSP
+    python -m juggle_tracker.cli doctor                   # preflight env checks
 """
 from __future__ import annotations
 
@@ -184,6 +185,141 @@ def _record(args) -> int:
     return 0
 
 
+# --- doctor / preflight --------------------------------------------------
+_PASS, _WARN, _FAIL = "PASS", "WARN", "FAIL"
+_SYM = {_PASS: "\u2713", _WARN: "!", _FAIL: "\u2717"}
+
+
+def _c_ffmpeg():
+    import shutil
+    path = shutil.which("ffmpeg")
+    if path:
+        return _PASS, f"found at {path}"
+    return _FAIL, "not found — install with: sudo apt-get install ffmpeg"
+
+
+def _c_config():
+    root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    if os.path.exists(os.path.join(root, "config.yaml")):
+        return _PASS, "config.yaml present"
+    return _WARN, "config.yaml missing — using config.example.yaml (copy + edit it)"
+
+
+def _c_models(cfg):
+    msgs = []
+    level = _PASS
+    for label, path in (("detector", cfg.models.detector), ("pose", cfg.models.pose)):
+        if os.path.exists(path):
+            kind = "OpenVINO" if path.endswith("_openvino_model") else "weights"
+            msgs.append(f"{label}: {kind} ok")
+        else:
+            level = _FAIL
+            msgs.append(f"{label}: MISSING ({path}) — run ./setup.sh")
+    return level, "; ".join(msgs)
+
+
+def _c_rtsp(cfg):
+    url = cfg.camera.get("rtsp_main")
+    if not url or "CHANGE_ME" in url:
+        return _WARN, "rtsp_main not configured yet"
+    try:
+        import cv2
+        os.environ.setdefault(
+            "OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp|stimeout;5000000"
+        )
+        cap = cv2.VideoCapture(url)
+        opened = cap.isOpened()
+        frame_ok = cap.read()[0] if opened else False
+        cap.release()
+        if frame_ok:
+            return _PASS, "connected and read a frame"
+        if opened:
+            return _WARN, "opened but couldn't read a frame (slow stream?)"
+        return _FAIL, "could not open stream (check IP/creds/RTSP enabled/network)"
+    except ImportError:
+        return _WARN, "opencv not installed yet — run ./setup.sh"
+    except Exception as exc:  # noqa: BLE001
+        return _FAIL, f"error: {exc}"
+
+
+def _c_mqtt(cfg):
+    ha = cfg.home_assistant
+    if not ha.get("enabled", False):
+        return _WARN, "home_assistant.enabled is false (skipping)"
+    host = ha.get("mqtt_host", "127.0.0.1")
+    port = int(ha.get("mqtt_port", 1883))
+    if ha.get("mqtt_password") in (None, "", "CHANGE_ME"):
+        return _WARN, f"MQTT password not set; would connect to {host}:{port}"
+    try:
+        import paho.mqtt.client as mqtt
+        state = {"rc": None}
+        cli = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+        if ha.get("mqtt_user"):
+            cli.username_pw_set(ha.get("mqtt_user"), ha.get("mqtt_password"))
+
+        def on_connect(client, userdata, flags, reason_code, properties=None):
+            state["rc"] = reason_code
+
+        cli.on_connect = on_connect
+        cli.connect(host, port, keepalive=10)
+        cli.loop_start()
+        for _ in range(50):
+            if state["rc"] is not None:
+                break
+            time.sleep(0.1)
+        cli.loop_stop()
+        cli.disconnect()
+        rc = state["rc"]
+        if rc is None:
+            return _FAIL, f"no response from broker at {host}:{port}"
+        if getattr(rc, "is_failure", False):
+            return _FAIL, f"broker refused connection: {rc}"
+        return _PASS, f"broker reachable at {host}:{port}"
+    except ImportError:
+        return _WARN, "paho-mqtt not installed yet — run ./setup.sh"
+    except Exception as exc:  # noqa: BLE001
+        return _FAIL, f"cannot reach broker at {host}:{port}: {exc}"
+
+
+def _c_inbox(cfg):
+    inbox = cfg.capture.inbox_dir
+    if not os.path.isdir(inbox):
+        return _WARN, f"{inbox} does not exist yet (created on first run)"
+    if os.access(inbox, os.R_OK | os.W_OK):
+        return _PASS, f"{inbox} readable + writable"
+    return _FAIL, f"{inbox} not writable (check permissions / bind-mount UID)"
+
+
+def _c_webcam():
+    if os.path.exists("/dev/video0"):
+        return _PASS, "/dev/video0 present (live enrollment available)"
+    return _WARN, "/dev/video0 absent — enroll with --images DIR instead"
+
+
+def _doctor(args) -> int:
+    cfg = load_config(args.config)
+    checks = [
+        ("config", _c_config()),
+        ("ffmpeg", _c_ffmpeg()),
+        ("models", _c_models(cfg)),
+        ("camera (RTSP)", _c_rtsp(cfg)),
+        ("home assistant (MQTT)", _c_mqtt(cfg)),
+        ("inbox dir", _c_inbox(cfg)),
+        ("webcam", _c_webcam()),
+    ]
+    print("Juggle Tracker preflight\n" + "=" * 60)
+    worst_fail = False
+    for name, (level, msg) in checks:
+        print(f"  [{_SYM[level]}] {level:<4} {name:<22} {msg}")
+        worst_fail = worst_fail or (level == _FAIL)
+    print("=" * 60)
+    if worst_fail:
+        print("Result: FAIL — resolve the ✗ items above before running.")
+        return 1
+    print("Result: OK (warnings are non-blocking).")
+    return 0
+
+
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="juggle_tracker", description=__doc__)
     p.add_argument("--config", default=None, help="Path to config.yaml")
@@ -211,6 +347,9 @@ def main(argv=None) -> int:
     pr = sub.add_parser("record", help="Record a clip from the camera RTSP")
     pr.add_argument("--seconds", type=int, default=0)
     pr.set_defaults(func=_record)
+
+    pd = sub.add_parser("doctor", help="Preflight: check ffmpeg, RTSP, MQTT, models, webcam")
+    pd.set_defaults(func=_doctor)
 
     args = p.parse_args(argv)
     return args.func(args)

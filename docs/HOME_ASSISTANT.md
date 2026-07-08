@@ -64,41 +64,106 @@ mode: queued
 > Because this is **batch** processing, the announcement fires a few minutes
 > after the session ends (when the clip finishes processing), not the instant the
 > record is set.
+## Auto-recording clips into the shared `inbox/`
 
-## Auto-recording clips on person detection
+The batch worker processes whatever lands in its `inbox/`. To feed it
+automatically, have Home Assistant record a clip when the RLC-810A reports a
+person and write it into that folder.
 
-The batch worker just processes whatever lands in `inbox/`. To feed it
-automatically, have HA record a clip when the RLC-810A reports a person and drop
-it where the worker sees it.
+### The key fact: HA is in Docker, the tracker is native
 
-Option A — **HA records the stream** (works entirely inside HA):
+On your box the tracker runs **natively** (systemd) but **Home Assistant runs in
+a Docker container**. A container can only write to host paths that are
+**bind-mounted** into it. So the wiring is: pick one host directory, mount it
+into the HA container, and point the tracker's `inbox_dir` at the same host path.
+
+```
+  HA container ──writes──▶ /media/juggle_inbox   (path INSIDE the container)
+                                 │  (bind mount)
+  host dir     ◀─────────────────┘  /srv/juggle_inbox   (path ON the host)
+                                 │
+  tracker (native) ──reads──▶ capture.inbox_dir = /srv/juggle_inbox
+```
+
+### Step 1 — pick a host dir and bind-mount it into HA
+
+Choose e.g. `/srv/juggle_inbox` on the host. Add it to however you launch HA:
+
+```yaml
+# docker-compose.yml for Home Assistant — add one volume line:
+services:
+  homeassistant:
+    # ...existing config...
+    volumes:
+      - /srv/juggle_inbox:/media/juggle_inbox   # <-- add this
+```
+
+Or with `docker run`: `-v /srv/juggle_inbox:/media/juggle_inbox`. Recreate the HA
+container so the mount takes effect. (`/media/...` is convenient because HA
+already allows writes there.)
+
+### Step 2 — point the tracker at the same host dir
+
+In `config.yaml`:
+
+```yaml
+capture:
+  inbox_dir: "/srv/juggle_inbox"
+```
+
+### Step 3 — HA automation to record on person detection
 
 ```yaml
 alias: Record yard clip on person
 trigger:
   - platform: state
-    entity_id: binary_sensor.front_yard_person   # RLC-810A person sensor
+    entity_id: binary_sensor.front_yard_person    # RLC-810A person sensor
     to: "on"
 action:
   - service: camera.record
     target:
-      entity_id: camera.front_yard_fluent          # or _clear (main stream)
+      entity_id: camera.front_yard_clear           # main stream = full detail
     data:
       duration: 30
       lookback: 4
-      # Write into a folder the tracker's inbox/ points at (bind-mount or symlink).
+      # This path is INSIDE the HA container (Step 1's mount target).
       filename: "/media/juggle_inbox/clip_{{ now().strftime('%Y%m%d_%H%M%S') }}.mp4"
 mode: single
 ```
 
-Then make the tracker's `capture.inbox_dir` the same folder HA writes to (a
-symlink or a shared Docker bind-mount). Since HA and the tracker run on the same
-MacBook, point both at one directory.
+(The ready-made version with a debounce is automation #2 in
+[`homeassistant/packages/juggle_tracker.yaml`](../homeassistant/packages/juggle_tracker.yaml)
+— just set the entity IDs and the `filename` path.)
 
-Option B — **tracker records from RTSP** on an HA webhook/MQTT nudge: call
-`python -m juggle_tracker.cli record --seconds 30` from an HA `shell_command` or a
-cron triggered by the person sensor. Option A is simpler if HA already has the
-camera stream.
+### Step 4 — permissions
+
+The HA container writes the file as its own user (often root); the native tracker
+reads and then **moves** it to `processed/`. Make sure the tracker's user can
+write in `/srv/juggle_inbox`:
+
+```bash
+sudo chown -R $USER:$USER /srv/juggle_inbox
+sudo chmod 775 /srv/juggle_inbox
+```
+
+If HA writes root-owned files the tracker can't move, either run HA with a
+matching `PUID/PGID`, or add a group both share and `chmod g+w`.
+
+### Verify end-to-end
+
+```bash
+python -m juggle_tracker.cli doctor        # 'inbox dir' should be PASS (writable)
+# trip the camera, then:
+ls -l /srv/juggle_inbox                     # a clip_*.mp4 should appear
+journalctl --user -u juggle-tracker.service -f   # watch it get processed + moved
+```
+
+### Alternative — tracker records from RTSP itself
+
+If you'd rather not share a folder, trigger the tracker to pull its own clip:
+call `python -m juggle_tracker.cli record --seconds 30` from an HA
+`shell_command` (or a cron) fired by the person sensor. Simpler folder story, but
+HA already has the stream, so the shared-inbox route above is usually cleaner.
 
 ## Sanity check the MQTT path
 
@@ -106,6 +171,8 @@ With the broker reachable, process any clip once; the entities should appear
 under **Settings → Devices & Services → MQTT → Soccer Juggle Tracker**. If they
 don't:
 
+- Run `python -m juggle_tracker.cli doctor` — the MQTT check confirms broker
+  reachability with your configured creds.
 - Confirm `home_assistant.enabled: true` and broker creds in `config.yaml`.
 - `mosquitto_sub -h HOST -u USER -P PASS -t 'homeassistant/#' -v` and re-process a
   clip — you should see the discovery config messages.
