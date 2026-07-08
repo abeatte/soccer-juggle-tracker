@@ -1,0 +1,17 @@
+# Core CV / ML — pinned for reproducibility on Intel macOS (CPU-only).
+# Ultralytics pulls in a CPU torch wheel automatically on Intel Macs.
+ultralytics==8.3.40
+opencv-python==4.10.0.84
+numpy==1.26.4
+
+# Face recognition (manual-enrollment identity assist).
+# InsightFace + onnxruntime is far lighter on CPU than dlib/face_recognition
+# and ships prebuilt wheels for Intel macOS.
+insightface==0.7.3
+onnxruntime==1.19.2
+
+# Home Assistant integration
+paho-mqtt==2.1.0
+
+# Config / plumbing
+PyYAML==6.0.2

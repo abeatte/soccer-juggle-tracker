@@ -1,0 +1,78 @@
+# Soccer Juggle Tracker — configuration.
+# Copy to config.yaml and edit. config.yaml is gitignored (holds credentials).
+
+camera:
+  # Reolink RLC-810A RTSP. The RLC-810A exposes two streams:
+  #   main : rtsp://USER:PASS@IP:554/h264Preview_01_main   (4K, for the record)
+  #   sub  : rtsp://USER:PASS@IP:554/h264Preview_01_sub     (lower res, faster analysis)
+  # We RECORD from main (full detail/framerate) and ANALYZE downscaled frames.
+  rtsp_main: "rtsp://cam_user:CHANGE_ME@192.168.1.50:554/h264Preview_01_main"
+  fps: 25                # source framerate of recorded clips
+
+capture:
+  clip_seconds: 30       # length of a motion-triggered clip
+  inbox_dir: "inbox"     # new clips land here (from HA/Reolink or manual copy)
+  processed_dir: "processed"   # clips are moved here after analysis
+
+# Region of interest in the frame, as fractions [0-1]: x0,y0,x1,y1.
+# Crop to just the play area to cut CPU cost and false detections.
+# Full frame = [0.0, 0.0, 1.0, 1.0].
+roi: [0.0, 0.0, 1.0, 1.0]
+
+processing:
+  # Analysis resolution (long edge, px). Smaller = faster, less accurate.
+  # 960 is a good CPU compromise for a 4K source on the 2016 MBP.
+  infer_long_edge: 960
+  # Run person-detect + pose every Nth frame (interpolate tracks between).
+  # The BALL is always detected every frame — it's the fast-moving object.
+  person_stride: 3
+  # Cap CPU cores so Home Assistant / Matter stay responsive. 0 = auto (leave 2 free).
+  torch_threads: 0
+
+models:
+  # Ultralytics weights (downloaded by setup.sh into ./models).
+  detector: "models/yolo11n.pt"        # person + sports ball (COCO)
+  pose: "models/yolo11n-pose.pt"       # 17-keypoint pose
+  # InsightFace model pack for face embeddings (auto-downloaded on first use).
+  face_pack: "buffalo_s"               # 's' = small/fast, good for CPU
+  # Detection confidence thresholds
+  person_conf: 0.35
+  ball_conf: 0.20                      # ball is small/blurry — keep this low
+  face_conf: 0.45
+
+identity:
+  # Cosine-similarity threshold for accepting a face match against enrolled people.
+  match_threshold: 0.42
+  # Frames a face must be seen and agree before locking a track to a person.
+  vote_min_frames: 3
+  max_people: 4
+
+juggle:
+  # Trajectory smoothing window (frames) for the ball y-signal.
+  smooth_window: 5
+  # A contact is a local MAXIMUM in ball image-y (bottom of the arc).
+  # Minimum arc height (px, at infer resolution) between contacts to count —
+  # rejects jitter when the ball is resting/rolling.
+  min_arc_px: 18
+  # Max px distance from ball-at-contact to a body keypoint to attribute the touch.
+  contact_radius_px: 90
+  # Keypoints that make a juggle VALID (COCO-17 names).
+  valid_keypoints: [left_shoulder, right_shoulder, left_knee, right_knee,
+                    left_ankle, right_ankle, nose, left_eye, right_eye]
+  # Keypoints that make a touch ILLEGAL (hands/arms) → reset streak.
+  illegal_keypoints: [left_wrist, right_wrist, left_elbow, right_elbow]
+  # Ground plane: image-y (fraction of frame height) at/below which a ball low
+  # point counts as a FLOOR touch → reset. Calibrate to your yard. 1.0 disables.
+  ground_y_frac: 0.92
+
+home_assistant:
+  enabled: true
+  mqtt_host: "127.0.0.1"
+  mqtt_port: 1883
+  mqtt_user: "mqtt_user"
+  mqtt_password: "CHANGE_ME"
+  discovery_prefix: "homeassistant"   # HA MQTT discovery topic root
+  node_id: "juggle_tracker"
+
+database:
+  path: "data/juggle.db"
