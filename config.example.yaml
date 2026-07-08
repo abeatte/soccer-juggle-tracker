@@ -36,9 +36,12 @@ processing:
   # Run person-detect + pose every Nth frame (interpolate tracks between).
   # The BALL is always detected every frame — it's the fast-moving object.
   person_stride: 4
-  # Cap CPU threads so Home Assistant / Matter stay responsive. This box has 8
-  # threads; 4 leaves half for HA/Matter. 0 = auto (leave 2 free).
-  torch_threads: 4
+  # Cap CPU threads. Measured baseline: HA+Matter use only ~3% CPU total, so the
+  # 8-thread i7-3740QM is nearly free during processing. 6 threads speeds up
+  # clips while leaving 2 for the system; the practical limit here is HEAT, not
+  # contention (idle pkg temp ~71C). If the box thermal-throttles under sustained
+  # load, drop to 4 (one per physical core). 0 = auto (leave 2 free).
+  torch_threads: 6
 
 models:
   # Ultralytics weights (downloaded by setup.sh into ./models).

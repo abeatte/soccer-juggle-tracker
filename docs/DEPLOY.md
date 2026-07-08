@@ -153,6 +153,9 @@ AVX2/FMA**, 15 GB RAM, bare metal). It works well for this batch pipeline, with
 these hardware-specific realities:
 
 - **RAM is not a constraint** (15 GB; models + torch need ~1–2 GB).
+- **HA/Matter are nearly idle** — measured ~3% CPU total (HA 1.9%, matter ~1.3%,
+  matterjs 0.05%) and ~1.35 GB RAM — so the worker can use most of the 8 threads
+  (`torch_threads: 6`). The practical ceiling is **heat**, not contention.
 - **CPU is the limit.** Expect ~1–3 analysis FPS, so a 20–30 s clip takes roughly
   **2–5 minutes** to process. Fine for delayed scoring; not real-time.
 - **OpenVINO gives little here** — its speedup depends on AVX2. Keep the `.pt`
@@ -166,7 +169,7 @@ Recommended `config.yaml` (already the defaults in `config.example.yaml`):
 
 ```yaml
 capture:    { clip_seconds: 20 }
-processing: { infer_long_edge: 640, person_stride: 4, torch_threads: 4 }
+processing: { infer_long_edge: 640, person_stride: 4, torch_threads: 6 }
 roi:        [ ... tight crop around the play area ... ]   # big win on slow CPU
 models:     # keep the .pt weights (NOT OpenVINO) on this no-AVX2 CPU
   detector: "models/yolo11n.pt"
