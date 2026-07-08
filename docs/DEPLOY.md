@@ -31,6 +31,19 @@ broker reachability/auth, and shared-inbox writability. Exit code is non-zero if
 any hard check fails. This is the fastest way to de-risk a box you have limited
 access to.
 
+For **tuning** (not just pass/fail), also run `deploy/box-telemetry.sh` — a
+read-only dump of CPU governor/frequency, thermals/throttling, VA-API hardware
+decode availability, RAM, disk write speed, current HA/Matter load, and a probe
+of the camera's main/sub streams (resolution/fps/codec). Paste its output back to
+tune `infer_long_edge` / `person_stride` / ROI / which stream to analyze / the
+CPU governor for this exact box:
+
+```bash
+RTSP_MAIN='rtsp://user:pass@CAM_IP:554/h264Preview_01_main' \
+RTSP_SUB='rtsp://user:pass@CAM_IP:554/h264Preview_01_sub' \
+DDTEST=1 bash box-telemetry.sh
+```
+
 ## Option A — native + systemd (recommended, already wired)
 
 Simplest and lowest-overhead on this CPU-bound, GPU-less box: a native process
