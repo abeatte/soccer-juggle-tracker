@@ -9,6 +9,28 @@ is identical no matter how you run the worker.
 You're on **Ubuntu on a 2016 Intel MacBook Pro**, alongside HA and Matter in
 Docker. Two good ways to run the worker:
 
+## Pre-deploy: verify the box first (no repo needed)
+
+Before installing anything, confirm the host can run this. Copy the single
+self-contained script `deploy/box-precheck.sh` to the box (it has **no** repo or
+Python dependency — stock tools only) and run it:
+
+```bash
+# camera / MQTT / inbox checks activate when you pass their env vars:
+RTSP_URL='rtsp://user:pass@192.168.1.50:554/h264Preview_01_main' \
+MQTT_HOST=127.0.0.1 MQTT_USER=mqtt MQTT_PASS=secret \
+INBOX_DIR=/srv/juggle_inbox \
+bash box-precheck.sh
+```
+
+It checks OS/arch, CPU cores + **AVX2** (OpenVINO speed), RAM, disk, current CPU
+headroom (HA/Matter already running), Python 3.9+/venv, ffmpeg, OpenCV runtime
+libs, `/dev/video0`, systemd user-manager + lingering + cgroup v2, the Docker
+daemon + a Home Assistant container, live **RTSP** decode from the camera, **MQTT**
+broker reachability/auth, and shared-inbox writability. Exit code is non-zero if
+any hard check fails. This is the fastest way to de-risk a box you have limited
+access to.
+
 ## Option A — native + systemd (recommended, already wired)
 
 Simplest and lowest-overhead on this CPU-bound, GPU-less box: a native process
