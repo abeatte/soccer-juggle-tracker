@@ -1,12 +1,18 @@
-# Core CV / ML — pinned for reproducibility on Intel macOS (CPU-only).
-# Ultralytics pulls in a CPU torch wheel automatically on Intel Macs.
+# Core CV / ML. Target: Ubuntu on an Intel (x86_64) 2016 MacBook Pro, CPU-only.
+# Ultralytics pulls in a CPU torch wheel automatically on Linux x86_64.
 ultralytics==8.3.40
 opencv-python==4.10.0.84
 numpy==1.26.4
 
-# Face recognition (manual-enrollment identity assist).
-# InsightFace + onnxruntime is far lighter on CPU than dlib/face_recognition
-# and ships prebuilt wheels for Intel macOS.
+# Intel-CPU acceleration. OpenVINO gives a large speedup over stock torch-CPU on
+# Intel processors. Export the models once with tools/export_openvino.py, then
+# point config.yaml at the exported dirs. See docs/DEPLOY.md.
+openvino==2024.4.0
+# Optional, only for `export_openvino.py --int8` quantization:
+# nncf==2.13.0
+
+# Face recognition (manual-enrollment identity assist). InsightFace + onnxruntime
+# is light on CPU and ships prebuilt Linux wheels.
 insightface==0.7.3
 onnxruntime==1.19.2
 

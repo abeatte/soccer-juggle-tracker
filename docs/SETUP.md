@@ -2,11 +2,17 @@
 
 ## 0. Prerequisites
 
-- Python 3.9+ (`python3 --version`)
-- `ffmpeg` on PATH (for clip recording): `brew install ffmpeg`
+- **Ubuntu** on the 2016 Intel MacBook Pro (x86_64).
+- Python 3.9+ (`python3 --version`) and `python3-venv`.
+- `ffmpeg` (for clip recording) and OpenCV runtime libs. `setup.sh` installs
+  these for you via apt, or manually:
+  ```bash
+  sudo apt-get install -y ffmpeg python3-venv python3-pip libgl1 libglib2.0-0
+  ```
 - Your Reolink RLC-810A on the LAN with a **static IP / DHCP reservation**,
   firmware updated, and an **admin** user with an **alphanumeric** password
   (special characters break Reolink auth). RTSP enabled.
+- For live webcam enrollment: a camera at `/dev/video0` (otherwise use `--images`).
 
 ## 1. Install
 
@@ -90,33 +96,27 @@ Scoreboard:
 python -m juggle_tracker.cli scores
 ```
 
-## 6. Run the worker as a background service (optional)
+## 6. Run the worker as a background service (systemd)
 
-Keep the batch worker alive across logins with a launchd agent (macOS). Example
-`~/Library/LaunchAgents/com.abeatte.juggletracker.plist`:
-
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-  <key>Label</key><string>com.abeatte.juggletracker</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/PATH/TO/soccer-juggle-tracker/.venv/bin/python</string>
-    <string>-m</string><string>juggle_tracker.cli</string><string>watch</string>
-  </array>
-  <key>WorkingDirectory</key><string>/PATH/TO/soccer-juggle-tracker</string>
-  <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
-  <key>StandardErrorPath</key><string>/PATH/TO/soccer-juggle-tracker/worker.log</string>
-  <key>StandardOutPath</key><string>/PATH/TO/soccer-juggle-tracker/worker.log</string>
-</dict></plist>
-```
+On Ubuntu, run the batch worker as a systemd service so it survives crashes and
+starts at boot, at low CPU/IO priority so HA/Matter stay responsive:
 
 ```bash
-launchctl load ~/Library/LaunchAgents/com.abeatte.juggletracker.plist
+deploy/install-systemd.sh            # user service: start now + at boot
+# or a boot-without-login system service (uses sudo, runs as you):
+deploy/install-systemd.sh --system
 ```
+
+Manage / inspect:
+
+```bash
+systemctl --user status juggle-tracker.service
+journalctl --user -u juggle-tracker.service -f
+deploy/install-systemd.sh uninstall
+```
+
+Prefer Docker instead? See [`DEPLOY.md`](DEPLOY.md) — on Linux it runs with no VM
+overhead and shares one `inbox/` volume with Home Assistant.
 
 ## Tuning accuracy
 

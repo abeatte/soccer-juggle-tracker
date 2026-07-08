@@ -31,6 +31,11 @@ processing:
 
 models:
   # Ultralytics weights (downloaded by setup.sh into ./models).
+  # Ultralytics auto-detects the format from the path. For a big speedup on this
+  # Intel CPU, export to OpenVINO once (python tools/export_openvino.py) and then
+  # point these at the exported dirs instead of the .pt files:
+  #   detector: "models/yolo11n_openvino_model"
+  #   pose:     "models/yolo11n-pose_openvino_model"
   detector: "models/yolo11n.pt"        # person + sports ball (COCO)
   pose: "models/yolo11n-pose.pt"       # 17-keypoint pose
   # InsightFace model pack for face embeddings (auto-downloaded on first use).

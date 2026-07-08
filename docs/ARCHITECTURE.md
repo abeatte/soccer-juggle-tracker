@@ -2,17 +2,21 @@
 
 ## Design driver: the hardware
 
-The deployment target is a **2016 Intel MacBook Pro** already running Home
-Assistant and Matter in Docker. Consequences:
+The deployment target is a **2016 Intel MacBook Pro running Ubuntu**, already
+running Home Assistant and Matter in Docker. Consequences:
 
-- **No CUDA** (no NVIDIA GPU) and **no Apple MPS** (MPS is M-series only) → PyTorch
-  is **CPU-only**.
-- The realtime pipeline (person-detect + pose + ball-track + face, every frame,
-  fast enough to catch a ball mid-arc) would run at ~2–5 FPS on this CPU. That is
-  **too slow to count juggles accurately** — a ball contact reverses in 2–3 frames
-  and would be missed.
+- **No ML-usable GPU** (Intel integrated graphics, no CUDA) → PyTorch is
+  **CPU-only**.
+- Because it's an **Intel** CPU on Linux, **OpenVINO** (Intel's inference runtime)
+  recovers a large chunk of speed — commonly ~2–3x over stock torch-CPU. Export
+  once with `tools/export_openvino.py` and point config at the exported dirs.
+- Even accelerated, the realtime pipeline (person-detect + pose + ball-track +
+  face, every frame, fast enough to catch a ball mid-arc) is marginal on this
+  CPU — **too slow to count juggles reliably in real time**, since a ball contact
+  reverses in 2–3 frames.
 - The box must stay responsive for HA/Matter, so the pipeline **caps CPU threads**
-  (`processing.torch_threads`, default: leave 2 cores free).
+  (`processing.torch_threads`, default: leave 2 cores free) and the systemd unit
+  runs at low CPU/IO priority.
 
 ## The batch (offline) decision
 

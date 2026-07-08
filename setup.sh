@@ -1,8 +1,19 @@
 #!/usr/bin/env bash
 # One-time setup: venv + deps + model weights.
-# Safe to re-run.
+# Target OS: Ubuntu (Linux x86_64). Safe to re-run.
+#   ./setup.sh              # venv + deps + download .pt weights
+#   ./setup.sh --openvino   # also export models to OpenVINO (Intel CPU speedup)
 set -euo pipefail
 cd "$(dirname "$0")"
+
+# System prerequisites (Ubuntu): python venv + ffmpeg.
+if command -v apt-get >/dev/null 2>&1; then
+  if ! command -v ffmpeg >/dev/null 2>&1 || ! python3 -m venv --help >/dev/null 2>&1; then
+    echo "==> Installing system prerequisites (sudo apt-get: ffmpeg, python3-venv)"
+    sudo apt-get update -qq
+    sudo apt-get install -y -qq ffmpeg python3-venv python3-pip libgl1 libglib2.0-0
+  fi
+fi
 
 echo "==> Creating virtualenv (.venv)"
 python3 -m venv .venv
@@ -37,6 +48,11 @@ PY
 
 echo "==> InsightFace face model (buffalo_s) will auto-download on first enroll."
 mkdir -p inbox processed data enroll_images
+
+if [[ "${1:-}" == "--openvino" ]]; then
+  echo "==> Exporting models to OpenVINO (Intel CPU acceleration)"
+  python tools/export_openvino.py || echo "  (OpenVINO export failed; continuing with .pt models)"
+fi
 
 echo ""
 echo "Setup complete. Next:"

@@ -1,0 +1,43 @@
+# systemd unit for the juggle-tracker batch worker (Ubuntu).
+#
+# Do NOT edit the __REPO__ placeholder by hand — run deploy/install-systemd.sh,
+# which substitutes the absolute repo path and installs a resolved copy.
+#
+# Installed as a *user* service (systemctl --user) by default so it needs no
+# root. install-systemd.sh enables lingering so it also starts at boot without
+# you being logged in. See deploy/install-systemd.sh for a system-service variant.
+
+[Unit]
+Description=Soccer Juggle Tracker batch worker
+# Start after the network + local MQTT broker are up (adjust if your broker is
+# a systemd service with a known name, e.g. mosquitto.service).
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=__REPO__
+ExecStart=__REPO__/.venv/bin/python -m juggle_tracker.cli watch
+
+# Be a good neighbour to Home Assistant / Matter: lowest CPU + IO priority.
+Nice=10
+IOSchedulingClass=idle
+# Cap CPU so the worker can never starve HA/Matter. On an N-core box, 100 = 1
+# core. Tune to taste; comment out to let Nice alone handle it.
+# (CPUQuota works in user units on modern systemd with cgroup v2.)
+CPUQuota=150%
+
+# Restart on crash, but throttle so a crash-loop can't peg the CPU.
+Restart=always
+RestartSec=30
+
+# Ensure ffmpeg and system tools are on PATH under systemd.
+Environment=PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin
+# Uncomment to force a specific CPU thread count for the ML stack:
+# Environment=OMP_NUM_THREADS=4
+
+StandardOutput=append:__REPO__/worker.log
+StandardError=append:__REPO__/worker.log
+
+[Install]
+WantedBy=default.target

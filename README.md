@@ -11,11 +11,15 @@ score. Scores are published to **Home Assistant** over MQTT.
 
 ## Why batch (offline) processing
 
-This runs on a **2016 Intel MacBook Pro** that is *also* hosting Home Assistant
-and Matter in Docker. That box has **no CUDA and no Apple MPS** (MPS is
-M-series only), so PyTorch runs **CPU-only** at roughly 2–5 FPS for this model
-stack. Juggling is far too fast to count accurately at that framerate in real
-time — the ball reverses in 2–3 frames.
+This runs on a **2016 Intel MacBook Pro running Ubuntu** that is *also* hosting
+Home Assistant and Matter in Docker. That box has **no GPU** usable for ML
+(Intel integrated graphics; no CUDA), so PyTorch runs **CPU-only** at roughly
+2–5 FPS for this model stack. Juggling is far too fast to count accurately at
+that framerate in real time — the ball reverses in 2–3 frames.
+
+> Because it's an **Intel** CPU on Linux, we recover a lot of that speed with
+> **OpenVINO** (Intel's inference runtime), commonly ~2–3x over stock torch-CPU.
+> See [`docs/DEPLOY.md`](docs/DEPLOY.md). Even so, batch keeps accuracy guaranteed.
 
 So the design **decouples capture from compute**:
 
@@ -91,23 +95,35 @@ clip.mp4 ─▶ capture ─▶ detect (person + ball)  ┐
 ## Docs
 
 - [`docs/SETUP.md`](docs/SETUP.md) — install, configure, enroll, run
+- [`docs/DEPLOY.md`](docs/DEPLOY.md) — how it runs on Ubuntu (systemd vs Docker), shared inbox, OpenVINO
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — why batch, the frame pipeline, the juggle state machine
 - [`docs/HOME_ASSISTANT.md`](docs/HOME_ASSISTANT.md) — MQTT discovery, dashboard, automations
 - [`docs/TUNING.md`](docs/TUNING.md) — first-clip calibration + ongoing regression tuning
 
 ## Auto-run + Home Assistant wiring
 
-- **Run the worker as a background service** (macOS launchd, low CPU priority so
+Target OS: **Ubuntu** on a 2016 Intel MacBook Pro (CPU-only), alongside HA +
+Matter. See [`docs/DEPLOY.md`](docs/DEPLOY.md) for the full picture.
+
+- **Run the worker as a background service** (systemd, low CPU/IO priority so
   HA/Matter stay responsive):
   ```bash
-  deploy/install-launchd.sh            # install + start
-  deploy/install-launchd.sh uninstall  # stop + remove
+  deploy/install-systemd.sh            # user service: start now + at boot
+  deploy/install-systemd.sh --system   # system service (sudo), runs as you
+  deploy/install-systemd.sh uninstall  # stop + remove
+  ```
+- **Intel-CPU acceleration** (biggest speedup toward real time): export the
+  models to OpenVINO once, then point `config.yaml` at the exported dirs:
+  ```bash
+  python tools/export_openvino.py      # (or ./setup.sh --openvino)
   ```
 - **Home Assistant package** with the extra sensors + automations (new-high-score
   TTS, auto-record clips on person detection, nightly leaderboard):
   copy [`homeassistant/packages/juggle_tracker.yaml`](homeassistant/packages/juggle_tracker.yaml)
   into `<config>/packages/`. The per-person high-score sensors themselves appear
   automatically via MQTT discovery.
+- **Docker** is a fully viable alternative on Linux (no VM overhead) — see
+  [`docs/DEPLOY.md`](docs/DEPLOY.md#option-b--docker-good-parity-with-hamatter).
 - **Measure accuracy over time**: `python tools/eval.py ground_truth.csv` scores a
   labelled clip set against your hand counts (sandboxed — never touches real
   scores). See [`docs/TUNING.md`](docs/TUNING.md).
