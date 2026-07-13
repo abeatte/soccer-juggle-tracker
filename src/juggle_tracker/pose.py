@@ -40,6 +40,10 @@ class PoseEstimator:
             return people
         data = r.keypoints.data.cpu().numpy()  # [N, 17, 3]
         for person in data:
+            # A detection can come back with no/partial keypoints (empty array);
+            # skip anything that doesn't have the full COCO-17 set.
+            if person.shape[0] < len(COCO_KEYPOINTS):
+                continue
             kp: Keypoints = {}
             for i, name in enumerate(COCO_KEYPOINTS):
                 x, y, c = person[i]
