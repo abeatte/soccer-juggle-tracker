@@ -61,6 +61,15 @@ TUNABLE_PARAMS = [
     {"path": ("identity", "vote_min_frames"), "slug": "vote_min_frames",
      "min": 1, "max": 10, "step": 1, "int": True,
      "name": "Identity Vote Frames", "icon": "mdi:vote"},
+    {"path": ("ball_fallback", "hough_param2"), "slug": "fallback_sensitivity",
+     "min": 5, "max": 60, "step": 1, "int": False,
+     "name": "Ball CV Sensitivity", "icon": "mdi:tune-variant"},
+    {"path": ("ball_fallback", "max_radius"), "slug": "fallback_max_radius",
+     "min": 5, "max": 120, "step": 1, "int": True,
+     "name": "Ball CV Max Radius", "icon": "mdi:circle-outline"},
+    {"path": ("ball_fallback", "search_radius"), "slug": "fallback_search_radius",
+     "min": 20, "max": 400, "step": 10, "int": True,
+     "name": "Ball CV Search Radius", "icon": "mdi:image-filter-center-focus"},
 ]
 
 _PARAM_BY_SLUG = {p["slug"]: p for p in TUNABLE_PARAMS}
@@ -159,6 +168,7 @@ class Config:
     home_assistant: _Dotted = None  # type: ignore[assignment]
     database: _Dotted = None  # type: ignore[assignment]
     calibration: _Dotted = None  # type: ignore[assignment]
+    ball_fallback: _Dotted = None  # type: ignore[assignment]
     roi: list[float] = None  # type: ignore[assignment]
     source_path: str = None  # type: ignore[assignment]
     overrides_path: str = None  # type: ignore[assignment]
@@ -174,6 +184,7 @@ class Config:
             "home_assistant",
             "database",
             "calibration",
+            "ball_fallback",
         ):
             setattr(self, key, _Dotted(self.raw.get(key, {})))
         self.roi = self.raw.get("roi", [0.0, 0.0, 1.0, 1.0])

@@ -20,6 +20,13 @@ class BallTracker:
         self._pts: deque = deque(maxlen=max(2, history))
         self._last_frame: Optional[int] = None
 
+    @property
+    def last_xy(self) -> Optional[Tuple[float, float]]:
+        """Last confirmed (detected) ball position, or None."""
+        if self._pts:
+            return (self._pts[-1][1], self._pts[-1][2])
+        return None
+
     def update(
         self, frame_index: int, ball_xy: Optional[Tuple[float, float]]
     ) -> Tuple[Optional[Tuple[float, float]], bool]:

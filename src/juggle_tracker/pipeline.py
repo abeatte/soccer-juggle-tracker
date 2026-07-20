@@ -26,7 +26,7 @@ from .capture import FrameSource
 from .config import Config
 from .ball_tracker import BallTracker
 from .db import Database
-from .detect import Detector
+from .detect import Detector, ClassicalBallDetector
 from .ha_mqtt import HAPublisher, _slug
 from .identity import (FaceEngine, Gallery, IdentityResolver, assign_face_to_track)
 from .juggle import JuggleCounter
@@ -84,6 +84,8 @@ class Pipeline:
             torch_threads=int(cfg.processing.get("torch_threads", 0)),
         )
         self.pose = PoseEstimator(cfg.models.pose)
+        # Classical fallback ball finder (used only when YOLO misses the ball).
+        self.ball_fallback = ClassicalBallDetector(cfg.ball_fallback)
         # Identity is optional — only if people are enrolled.
         ids, names, embs = self.db.load_gallery()
         self.has_identity = len(ids) > 0
@@ -177,6 +179,8 @@ class Pipeline:
 
             det = self.detector.detect_track(img)
             ball_det = det.ball.xy if det.ball else None
+            if ball_det is None and self.ball_fallback.enabled:
+                ball_det = self.ball_fallback.detect(img, ball_tracker.last_xy)
             ball_xy, ball_bridged = ball_tracker.update(frame.index, ball_det)
 
             # Pose + identity on stride frames.
@@ -271,12 +275,15 @@ class Pipeline:
         if det.ball:
             bx, by = (int(v) for v in det.ball.xy)
             cv2.circle(vis, (bx, by), max(4, int(det.ball.r)), (0, 128, 255), 2)
-        elif ball_bridged and ball_xy is not None:
-            # Predicted (bridged) ball position — thin yellow marker.
+        elif ball_xy is not None:
+            # No YOLO ball: either a bridged prediction (yellow) or a classical
+            # fallback detection (magenta).
             bx, by = int(ball_xy[0]), int(ball_xy[1])
-            cv2.circle(vis, (bx, by), 8, (0, 255, 255), 1)
-            cv2.putText(vis, "bridge", (bx + 10, by),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 255), 1)
+            color = (0, 255, 255) if ball_bridged else (255, 0, 255)
+            label = "bridge" if ball_bridged else "cv"
+            cv2.circle(vis, (bx, by), 8, color, 1)
+            cv2.putText(vis, label, (bx + 10, by),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
         if kps:
             for _, (x, y, c) in kps.items():
                 if c >= 0.2:
@@ -339,6 +346,8 @@ class Pipeline:
                     counter = self._new_counter(h)
                 det = self.detector.detect_track(img)
                 ball_det = det.ball.xy if det.ball else None
+                if ball_det is None and self.ball_fallback.enabled:
+                    ball_det = self.ball_fallback.detect(img, ball_tracker.last_xy)
                 ball_xy, ball_bridged = ball_tracker.update(frame.index, ball_det)
                 if frame.index % stride == 0 and det.persons:
                     poses = self.pose.estimate(img)

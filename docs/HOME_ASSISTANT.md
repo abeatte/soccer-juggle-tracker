@@ -256,6 +256,13 @@ sit in the device's *Configuration* section):
 | Juggle Ball Bridge Frames | `juggle.max_bridge_frames` |
 | Juggle Face Match Threshold | `identity.match_threshold` |
 | Juggle Identity Vote Frames | `identity.vote_min_frames` |
+| Juggle Ball CV Sensitivity | `ball_fallback.hough_param2` (lower = more circles) |
+| Juggle Ball CV Max Radius | `ball_fallback.max_radius` |
+| Juggle Ball CV Search Radius | `ball_fallback.search_radius` |
+
+The **Ball CV** numbers only take effect when `ball_fallback.enabled: true` in
+`config.yaml` — a classical OpenCV Hough-circle detector that runs only on
+frames where YOLO misses the ball (complements it on blurry/small-ball frames).
 
 Plus buttons **Apply Calibration & Restart** and **Revert Calibration to
 Defaults**.

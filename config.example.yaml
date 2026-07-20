@@ -108,6 +108,24 @@ juggle:
   # Keep modest — a juggle arc is short; large values invent phantom positions.
   max_bridge_frames: 8
 
+# Classical (OpenCV) ball detector used ONLY on frames where the YOLO detector
+# misses the ball. Shape-based (Hough circles) with an optional HSV color gate,
+# constrained to a window around the last known ball position to cut false
+# positives and cost. Enable if the ball is frequently undetected mid-flight.
+ball_fallback:
+  enabled: false
+  min_radius: 4             # px at infer resolution
+  max_radius: 40
+  search_radius: 140        # only look within this many px of the last known ball
+  dp: 1.2                   # Hough inverse accumulator resolution
+  hough_param1: 100         # Canny high threshold
+  hough_param2: 18          # accumulator threshold — LOWER = more (looser) circles
+  # Optional HSV color gate (leave null for shape-only). Example white ball:
+  #   hsv_lower: [0, 0, 180]
+  #   hsv_upper: [180, 60, 255]
+  hsv_lower: null
+  hsv_upper: null
+
 home_assistant:
   enabled: true
   mqtt_host: "127.0.0.1"

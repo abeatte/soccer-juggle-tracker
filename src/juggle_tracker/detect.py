@@ -110,3 +110,65 @@ class Detector:
                     best_ball = cand
         out.ball = best_ball
         return out
+
+
+class ClassicalBallDetector:
+    """OpenCV fallback ball finder, used ONLY when YOLO misses the ball.
+
+    Shape-based (Hough circles) with an optional HSV color gate, restricted to a
+    window around the last known ball position to cut false positives and cost.
+    Returns a centroid ``(x, y)`` or ``None``."""
+
+    def __init__(self, cfg):
+        self.enabled = bool(cfg.get("enabled", False))
+        self.min_radius = int(cfg.get("min_radius", 4))
+        self.max_radius = int(cfg.get("max_radius", 40))
+        self.search_radius = int(cfg.get("search_radius", 140))
+        self.dp = float(cfg.get("dp", 1.2))
+        self.param1 = float(cfg.get("hough_param1", 100))
+        self.param2 = float(cfg.get("hough_param2", 18))
+        self.hsv_lower = cfg.get("hsv_lower")
+        self.hsv_upper = cfg.get("hsv_upper")
+
+    def detect(self, image: np.ndarray, last_xy=None) -> Optional[tuple]:
+        if not self.enabled:
+            return None
+        import cv2
+
+        h, w = image.shape[:2]
+        ox, oy = 0, 0
+        roi = image
+        # Restrict the search to a window around the last known ball position.
+        if last_xy is not None and self.search_radius > 0:
+            cx, cy = int(last_xy[0]), int(last_xy[1])
+            x0 = max(0, cx - self.search_radius)
+            y0 = max(0, cy - self.search_radius)
+            x1 = min(w, cx + self.search_radius)
+            y1 = min(h, cy + self.search_radius)
+            if x1 - x0 < 8 or y1 - y0 < 8:
+                return None
+            roi = image[y0:y1, x0:x1]
+            ox, oy = x0, y0
+        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        # Optional color gate: keep only pixels within the HSV range.
+        if self.hsv_lower and self.hsv_upper:
+            hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+            mask = cv2.inRange(hsv, np.array(self.hsv_lower, dtype=np.uint8),
+                               np.array(self.hsv_upper, dtype=np.uint8))
+            gray = cv2.bitwise_and(gray, gray, mask=mask)
+        gray = cv2.medianBlur(gray, 3)
+        circles = cv2.HoughCircles(
+            gray, cv2.HOUGH_GRADIENT, dp=self.dp,
+            minDist=max(10, self.min_radius * 2),
+            param1=self.param1, param2=self.param2,
+            minRadius=self.min_radius, maxRadius=self.max_radius,
+        )
+        if circles is None or len(circles) == 0:
+            return None
+        cands = circles[0]  # each: (x, y, r) in ROI coords
+        if last_xy is not None:
+            lx, ly = last_xy[0] - ox, last_xy[1] - oy
+            best = min(cands, key=lambda c: (c[0] - lx) ** 2 + (c[1] - ly) ** 2)
+        else:
+            best = cands[0]
+        return (float(best[0] + ox), float(best[1] + oy))
