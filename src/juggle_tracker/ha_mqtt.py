@@ -17,9 +17,11 @@ import json
 import os
 import re
 import sqlite3
+import subprocess
 import time
 from typing import Optional
 
+from . import config as cfgmod
 from .db import UNKNOWN_NAME
 
 try:
@@ -75,8 +77,17 @@ class HAPublisher:
         # Listen for "reset high score" button presses from HA. The button
         # publishes the target person's slug to this shared command topic.
         self.cmd_topic = f"{self.node}/reset/set"
-        self.client.on_message = self._on_reset_message
+        # Calibration control: editable config numbers + Apply/Revert buttons.
+        self.calib_enabled = bool(self.cfg.calibration.get("enabled", True))
+        self.apply_topic = f"{self.node}/apply/set"
+        self.revert_topic = f"{self.node}/revert/set"
+        self.client.on_message = self._on_message
         self.client.subscribe(self.cmd_topic)
+        if self.calib_enabled:
+            self.client.subscribe(f"{self.node}/config/+/set")
+            self.client.subscribe(self.apply_topic)
+            self.client.subscribe(self.revert_topic)
+            self.announce_calibration()
 
     # ------------------------------------------------------------------
     def _device(self) -> dict:
@@ -148,14 +159,27 @@ class HAPublisher:
         }
         self.client.publish(topic, json.dumps(payload), retain=True)
 
-    def _on_reset_message(self, client, userdata, msg) -> None:
-        """MQTT callback: a reset button was pressed (payload = person slug)."""
+    def _on_message(self, client, userdata, msg) -> None:
+        """Route inbound MQTT commands (reset / calibration set / apply / revert)."""
         try:
-            slug = msg.payload.decode().strip()
-            if slug:
-                self._reset_person(slug)
+            topic = msg.topic
+            payload = msg.payload.decode().strip()
+            if topic == self.cmd_topic:
+                if payload:
+                    self._reset_person(payload)
+            elif not self.calib_enabled:
+                return
+            elif topic == self.apply_topic:
+                self._apply_and_restart()
+            elif topic == self.revert_topic:
+                self._revert_calibration()
+            else:
+                # {node}/config/{slug}/set
+                parts = topic.split("/")
+                if len(parts) == 4 and parts[1] == "config" and parts[3] == "set":
+                    self._handle_config_set(parts[2], payload)
         except Exception as exc:  # never let a bad message kill the loop
-            print(f"  [reset] error handling reset command: {exc}", flush=True)
+            print(f"  [mqtt] error handling {msg.topic}: {exc}", flush=True)
 
     def _reset_person(self, slug: str) -> None:
         """Zero a person's high score, delete their replay clip, and re-publish.
@@ -196,6 +220,112 @@ class HAPublisher:
         print(f"  [reset] {name}: high score cleared and replay removed",
               flush=True)
 
+    # ------------------------------------------------------------------
+    def announce_calibration(self) -> None:
+        """Discovery for editable calibration `number` entities + Apply/Revert
+        buttons, seeded from the current (merged) config. All grouped under the
+        device with entity_category 'config' so they tuck into the device's
+        configuration section."""
+        if not self.enabled:
+            return
+        dev = self._device()
+        for spec in cfgmod.TUNABLE_PARAMS:
+            slug = spec["slug"]
+            self.client.publish(
+                f"{self.prefix}/number/{self.node}/cfg_{slug}/config",
+                json.dumps({
+                    "name": f"Juggle {spec['name']}",
+                    "unique_id": f"{self.node}_cfg_{slug}",
+                    "state_topic": f"{self.node}/config/{slug}",
+                    "command_topic": f"{self.node}/config/{slug}/set",
+                    "min": spec["min"], "max": spec["max"], "step": spec["step"],
+                    "mode": "box",
+                    "icon": spec["icon"],
+                    "entity_category": "config",
+                    "availability_topic": self.avail_topic,
+                    "device": dev,
+                }), retain=True)
+            # Seed the current value so HA shows what actually produced results.
+            val = cfgmod.get_by_path(self.cfg.raw, spec["path"], spec["min"])
+            self.client.publish(f"{self.node}/config/{slug}", val, retain=True)
+        # Apply & Restart button.
+        self.client.publish(
+            f"{self.prefix}/button/{self.node}/apply_restart/config",
+            json.dumps({
+                "name": "Apply Calibration & Restart",
+                "unique_id": f"{self.node}_apply_restart",
+                "command_topic": self.apply_topic,
+                "payload_press": "apply",
+                "icon": "mdi:restart",
+                "entity_category": "config",
+                "availability_topic": self.avail_topic,
+                "device": dev,
+            }), retain=True)
+        # Revert-to-defaults button.
+        self.client.publish(
+            f"{self.prefix}/button/{self.node}/revert_defaults/config",
+            json.dumps({
+                "name": "Revert Calibration to Defaults",
+                "unique_id": f"{self.node}_revert_defaults",
+                "command_topic": self.revert_topic,
+                "payload_press": "revert",
+                "icon": "mdi:backup-restore",
+                "entity_category": "config",
+                "availability_topic": self.avail_topic,
+                "device": dev,
+            }), retain=True)
+
+    def _handle_config_set(self, slug: str, payload: str) -> None:
+        """Persist an edited calibration value to the overrides file (no restart
+        — it activates on the next Apply & Restart)."""
+        spec = cfgmod.param_for_slug(slug)
+        if spec is None:
+            print(f"  [calib] unknown param '{slug}'", flush=True)
+            return
+        try:
+            value = cfgmod.clamp_param(spec, float(payload))
+        except (TypeError, ValueError):
+            print(f"  [calib] bad value '{payload}' for {slug}", flush=True)
+            return
+        try:
+            cfgmod.set_override(self.cfg.overrides_path, spec["path"], value)
+        except Exception as exc:
+            print(f"  [calib] failed to save override for {slug}: {exc}",
+                  flush=True)
+            return
+        # Reflect the accepted (clamped) value back to HA.
+        self.client.publish(f"{self.node}/config/{slug}", value, retain=True)
+        print(f"  [calib] {slug} -> {value} (saved; press Apply & Restart to "
+              f"activate)", flush=True)
+
+    def _apply_and_restart(self) -> None:
+        print("  [calib] Apply pressed; restarting worker to load new config...",
+              flush=True)
+        self._restart_service()
+
+    def _revert_calibration(self) -> None:
+        removed = cfgmod.clear_overrides(self.cfg.overrides_path)
+        print(f"  [calib] revert to defaults "
+              f"({'removed overrides' if removed else 'no overrides file'}); "
+              f"restarting...", flush=True)
+        self._restart_service()
+
+    def _restart_service(self) -> None:
+        """Restart the worker so config (incl. overrides) is reloaded. Falls
+        back to process exit (systemd Restart=always brings it back)."""
+        svc = self.cfg.calibration.get("service_name", "juggle-tracker.service")
+        try:
+            self.client.publish(self.avail_topic, "offline", retain=True)
+        except Exception:
+            pass
+        try:
+            subprocess.Popen(["systemctl", "--user", "restart", svc])
+        except Exception as exc:
+            print(f"  [calib] 'systemctl --user restart {svc}' failed ({exc}); "
+                  f"exiting so systemd Restart=always relaunches", flush=True)
+            os._exit(0)
+
+    # ------------------------------------------------------------------
     def publish_session(self, results: list[dict]) -> None:
         """Publish a summary of the just-processed clip."""
         if not self.enabled:

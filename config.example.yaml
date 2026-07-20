@@ -116,6 +116,16 @@ home_assistant:
 database:
   path: "data/juggle.db"
 
+calibration:
+  # Expose the model / juggle-detection params below as EDITABLE Home Assistant
+  # number entities, plus "Apply Calibration & Restart" and "Revert Calibration
+  # to Defaults" buttons (grouped under the device's config section). Editing a
+  # value writes it to calibration_overrides.yaml (deep-merged over this file at
+  # startup, so your commented config.yaml stays pristine). Nothing takes effect
+  # until you press Apply & Restart. Revert deletes the overrides file.
+  enabled: true
+  service_name: "juggle-tracker.service"   # systemctl --user unit restarted on Apply
+
 thermal:
   # Pause processing when the CPU package gets too hot, so an old laptop doesn't
   # thermal-throttle mid-clip or overheat. Ivy Bridge throttles near ~100C.

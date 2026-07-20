@@ -10,6 +10,8 @@ env/
 # Config & secrets (contains RTSP creds + MQTT password)
 config.yaml
 machine-telemetry/machine-telemetry.env
+# Machine-written calibration overrides (tuned per-box via HA)
+calibration_overrides.yaml
 
 # Runtime data
 data/

@@ -234,6 +234,63 @@ cards:
 > `button.` entity IDs may be device-prefixed (like your sensors) — grab them
 > from Developer Tools → States (filter `reset`).
 
+## Calibration — edit detection settings from HA
+
+With `calibration.enabled: true` (default), the tracker publishes the key
+detection parameters as **editable `number` entities** plus two buttons, all
+grouped under the Soccer Juggle Tracker device (as `config` entities, so they
+sit in the device's *Configuration* section):
+
+| Entity (number) | Config key |
+|---|---|
+| Juggle Ball Confidence | `models.ball_conf` |
+| Juggle Person Confidence | `models.person_conf` |
+| Juggle Face Confidence | `models.face_conf` |
+| Juggle Inference Resolution | `processing.infer_long_edge` |
+| Juggle Person/Pose Stride | `processing.person_stride` |
+| Juggle Contact Radius (px) | `juggle.contact_radius_px` |
+| Juggle Min Arc Height (px) | `juggle.min_arc_px` |
+| Juggle Ground Line (frac) | `juggle.ground_y_frac` |
+| Juggle Smoothing Window | `juggle.smooth_window` |
+| Juggle Face Match Threshold | `identity.match_threshold` |
+| Juggle Identity Vote Frames | `identity.vote_min_frames` |
+
+Plus buttons **Apply Calibration & Restart** and **Revert Calibration to
+Defaults**.
+
+**Workflow:** the numbers are seeded from your current config. Edit any of them
+→ the value is saved to `calibration_overrides.yaml` (deep-merged over
+`config.yaml`, so your commented config stays pristine) but **does not take
+effect yet**. Press **Apply Calibration & Restart** to restart the worker so the
+new values load. **Revert Calibration to Defaults** deletes the overrides file
+and restarts (back to `config.yaml`).
+
+> Model thresholds (`ball_conf`, etc.) are read once at worker startup, which is
+> why applying requires a restart. Nudge several values, then Apply once. The
+> restart uses `systemctl --user restart` (unit from `calibration.service_name`);
+> if that fails it exits and systemd's `Restart=always` relaunches it.
+
+Dashboard example (verify the exact `number.` / `button.` IDs in Developer Tools
+→ States — filter `juggle` — as they may be device-prefixed):
+
+```yaml
+type: entities
+title: 🎛️ Calibration
+entities:
+  - entity: number.juggle_ball_confidence
+  - entity: number.juggle_contact_radius_px
+  - entity: number.juggle_min_arc_height_px
+  - entity: number.juggle_ground_line_frac
+  - entity: number.juggle_person_pose_stride
+  - entity: number.juggle_inference_resolution
+  - type: divider
+  - entity: button.apply_calibration_restart
+  - entity: button.revert_calibration_to_defaults
+```
+
+> ROI (play-area box) and keypoint ("dots") toggles are **not** here yet — those
+> get the visual editor in Phase 2.
+
 ## New-high-score announcement (TTS)
 
 Trigger off the event topic and speak it on a media player:
