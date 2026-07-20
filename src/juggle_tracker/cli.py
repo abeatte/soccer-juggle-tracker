@@ -345,6 +345,30 @@ def _c_inbox(cfg):
     return _FAIL, f"{inbox} not writable (check permissions / bind-mount UID)"
 
 
+def _c_highscore(cfg):
+    if not cfg.capture.get("save_highscore_video", True):
+        return _WARN, "save_highscore_video is false (replay clips disabled)"
+    d = cfg.capture.get("highscore_dir", "highscores")
+    annotate = cfg.capture.get("annotate_highscore", True)
+    if not os.path.isdir(d):
+        return _WARN, f"{d} does not exist yet (created on first record)"
+    if not os.access(d, os.R_OK | os.W_OK):
+        return _FAIL, f"{d} not writable (tracker must write replay clips here)"
+    # Annotated replays need the system ffmpeg's H.264 encoder for HA playback.
+    if annotate:
+        import subprocess
+        try:
+            out = subprocess.run(["ffmpeg", "-hide_banner", "-encoders"],
+                                  capture_output=True, text=True, timeout=10)
+            if "libx264" not in out.stdout:
+                return _WARN, (f"{d} writable, but ffmpeg lacks libx264 — "
+                               "annotated clips won't be H.264 (set "
+                               "annotate_highscore: false or install libx264)")
+        except Exception:
+            return _WARN, f"{d} writable; could not verify ffmpeg libx264"
+    return _PASS, f"{d} writable ({'annotated H.264' if annotate else 'raw clip'})"
+
+
 def _c_webcam():
     if os.path.exists("/dev/video0"):
         return _PASS, "/dev/video0 present (live enrollment available)"
@@ -360,6 +384,7 @@ def _doctor(args) -> int:
         ("camera (RTSP)", _c_rtsp(cfg)),
         ("home assistant (MQTT)", _c_mqtt(cfg)),
         ("inbox dir", _c_inbox(cfg)),
+        ("highscore dir", _c_highscore(cfg)),
         ("webcam", _c_webcam()),
     ]
     print("Juggle Tracker preflight\n" + "=" * 60)

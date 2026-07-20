@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import subprocess
 import time
 from dataclasses import dataclass
 from typing import Optional
@@ -324,6 +325,22 @@ class Pipeline:
             if writer is not None:
                 writer.release()
 
+    def _transcode_h264(self, src: str, dst: str) -> None:
+        """Transcode ``src`` to browser-playable H.264/yuv420p via system ffmpeg.
+
+        OpenCV on this no-AVX2 box can only write mp4v, which the HA dashboard /
+        Chrome won't play inline. The system ffmpeg (``libx264``) produces a
+        widely-playable file; ``veryfast`` keeps CPU/heat down and the overlay
+        clip is only 640px so it's quick. ``+faststart`` moves the moov atom to
+        the front for progressive web playback. Raises (``check=True``) on
+        failure so the caller falls back to the raw clip."""
+        subprocess.run(
+            ["ffmpeg", "-y", "-loglevel", "error", "-i", src,
+             "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
+             "-movflags", "+faststart", "-an", dst],
+            check=True,
+        )
+
     def _capture_highscore_videos(self, clip_path: str,
                                   new_highs: list[dict]) -> None:
         """Save/refresh the per-person high-score replay clip.
@@ -345,10 +362,21 @@ class Pipeline:
             if annotate:
                 # Reflect the extra work in HA's worker-state sensor.
                 self.ha.publish_status("rendering", current=clip_path)
-                self._render_annotated(clip_path, tmp)
-                if not os.path.exists(tmp) or os.path.getsize(tmp) == 0:
-                    raise RuntimeError("annotated render produced no output")
+                raw = os.path.join(hs_dir, f".raw_{int(ts)}.mp4")
+                try:
+                    self._render_annotated(clip_path, raw)
+                    if not os.path.exists(raw) or os.path.getsize(raw) == 0:
+                        raise RuntimeError("annotated render produced no output")
+                    # OpenCV can only emit mp4v on this (no-AVX2/no-H.264) box,
+                    # which browsers / the HA dashboard won't play inline. The
+                    # system ffmpeg (libx264) transcodes the small overlay clip
+                    # to widely-playable H.264.
+                    self._transcode_h264(raw, tmp)
+                finally:
+                    if os.path.exists(raw):
+                        os.remove(raw)
             else:
+                # Raw HA-recorded clip is already H.264 — just copy it.
                 shutil.copyfile(clip_path, tmp)
         except Exception as exc:  # fall back to the raw clip; never lose a record
             print(f"  [highscore] annotate failed ({exc}); saving raw clip",

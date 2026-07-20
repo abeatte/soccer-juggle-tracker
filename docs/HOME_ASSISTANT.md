@@ -57,6 +57,11 @@ run and Home Assistant can play it — either inline in a card or via a link.
   streak counter) rendered as a quick second pass — and *only* for record-setting
   clips, so the extra CPU/heat on the old laptop is paid rarely. Set
   `capture.annotate_highscore: false` to just copy the raw clip instead.
+- The annotated overlay is written by OpenCV as `mp4v` (the only codec available
+  on the no-AVX2 box) and then **transcoded to H.264 with the system `ffmpeg`**
+  (`libx264`) so it plays inline in the HA dashboard / browsers. If the transcode
+  ever fails, it falls back to saving the raw (already-H.264) clip so a record is
+  never lost. `raw` clips (`annotate_highscore: false`) skip the transcode.
 - The tracker publishes the clip's URL as the **`video_url`** attribute on that
   kid's `sensor.<person>_juggle_high_score` entity.
 
