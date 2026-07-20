@@ -9,6 +9,7 @@ env/
 
 # Config & secrets (contains RTSP creds + MQTT password)
 config.yaml
+machine-telemetry/machine-telemetry.env
 
 # Runtime data
 data/

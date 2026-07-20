@@ -1,0 +1,32 @@
+# systemd unit for the machine-telemetry publisher (Ubuntu).
+#
+# Do NOT edit the __REPO__ placeholder by hand — run machine-telemetry/install.sh,
+# which substitutes the absolute repo path and installs a resolved copy.
+#
+# Reuses the repo's shared .venv (created by ./setup.sh) — paho-mqtt is already a
+# project dependency, so no separate environment is needed.
+
+[Unit]
+Description=Machine telemetry -> Home Assistant (MQTT)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=__REPO__
+EnvironmentFile=__REPO__/machine-telemetry/machine-telemetry.env
+ExecStart=__REPO__/.venv/bin/python __REPO__/machine-telemetry/telemetry_publisher.py
+
+# Be a good neighbour to Home Assistant / Frigate / the juggle worker on this
+# old CPU: lowest priority and a hard CPU cap (the publisher is nearly idle).
+Nice=15
+IOSchedulingClass=idle
+CPUQuota=15%
+
+# Restart on crash, throttled so a crash-loop can't peg the CPU.
+Restart=always
+RestartSec=30
+Environment=PATH=/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin
+
+[Install]
+WantedBy=default.target
