@@ -24,6 +24,7 @@ import numpy as np
 
 from .capture import FrameSource
 from .config import Config
+from .ball_tracker import BallTracker
 from .db import Database
 from .detect import Detector
 from .ha_mqtt import HAPublisher, _slug
@@ -138,6 +139,7 @@ class Pipeline:
 
         writer = None
         counter: Optional[JuggleCounter] = None
+        ball_tracker = self._new_ball_tracker()
         streaks: list[dict] = []
         new_highs: list[dict] = []
         active_track: Optional[int] = None
@@ -174,7 +176,8 @@ class Pipeline:
                 counter = self._new_counter(h)
 
             det = self.detector.detect_track(img)
-            ball_xy = det.ball.xy if det.ball else None
+            ball_det = det.ball.xy if det.ball else None
+            ball_xy, ball_bridged = ball_tracker.update(frame.index, ball_det)
 
             # Pose + identity on stride frames.
             if frame.index % stride == 0 and det.persons:
@@ -199,7 +202,8 @@ class Pipeline:
 
             if debug_video:
                 writer = self._draw(
-                    img, det, kps, counter, active_track, writer, debug_video
+                    img, det, ball_xy, ball_bridged, kps, counter,
+                    active_track, writer, debug_video
                 )
 
         # Flush trailing streak.
@@ -255,7 +259,8 @@ class Pipeline:
         if is_high:
             new_highs.append({"person": name, "score": event.count, "pid": pid})
 
-    def _draw(self, img, det, kps, counter, active_track, writer, path):
+    def _draw(self, img, det, ball_xy, ball_bridged, kps, counter, active_track,
+              writer, path):
         vis = img.copy()
         for p in det.persons:
             x0, y0, x1, y1 = (int(v) for v in p.xyxy)
@@ -266,6 +271,12 @@ class Pipeline:
         if det.ball:
             bx, by = (int(v) for v in det.ball.xy)
             cv2.circle(vis, (bx, by), max(4, int(det.ball.r)), (0, 128, 255), 2)
+        elif ball_bridged and ball_xy is not None:
+            # Predicted (bridged) ball position — thin yellow marker.
+            bx, by = int(ball_xy[0]), int(ball_xy[1])
+            cv2.circle(vis, (bx, by), 8, (0, 255, 255), 1)
+            cv2.putText(vis, "bridge", (bx + 10, by),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 255), 1)
         if kps:
             for _, (x, y, c) in kps.items():
                 if c >= 0.2:
@@ -280,6 +291,11 @@ class Pipeline:
         return writer
 
     # ------------------------------------------------------------------
+    def _new_ball_tracker(self) -> BallTracker:
+        return BallTracker(
+            max_bridge_frames=int(self.cfg.juggle.get("max_bridge_frames", 8))
+        )
+
     def _new_counter(self, frame_height: int) -> JuggleCounter:
         """Build a JuggleCounter from config (shared by process + render pass)."""
         j = self.cfg.juggle
@@ -310,6 +326,7 @@ class Pipeline:
         stride = max(1, int(self.cfg.processing.get("person_stride", 3)))
         writer = None
         counter: Optional[JuggleCounter] = None
+        ball_tracker = self._new_ball_tracker()
         active_track: Optional[int] = None
         last_poses: dict[int, dict] = {}
         try:
@@ -321,7 +338,8 @@ class Pipeline:
                 if counter is None:
                     counter = self._new_counter(h)
                 det = self.detector.detect_track(img)
-                ball_xy = det.ball.xy if det.ball else None
+                ball_det = det.ball.xy if det.ball else None
+                ball_xy, ball_bridged = ball_tracker.update(frame.index, ball_det)
                 if frame.index % stride == 0 and det.persons:
                     poses = self.pose.estimate(img)
                     last_poses = _match_pose_to_track(poses, det.persons)
@@ -331,7 +349,8 @@ class Pipeline:
                 kps = last_poses.get(active_track) if active_track is not None else None
                 counter.update(frame.index, ball_xy, kps)
                 writer = self._draw(
-                    img, det, kps, counter, active_track, writer, out_path
+                    img, det, ball_xy, ball_bridged, kps, counter,
+                    active_track, writer, out_path
                 )
         finally:
             src.release()

@@ -253,6 +253,7 @@ sit in the device's *Configuration* section):
 | Juggle Ground Line (frac) | `juggle.ground_y_frac` |
 | Juggle Smoothing Window | `juggle.smooth_window` |
 | Juggle Lost-Ball Frames | `juggle.lost_frames_reset` |
+| Juggle Ball Bridge Frames | `juggle.max_bridge_frames` |
 | Juggle Face Match Threshold | `identity.match_threshold` |
 | Juggle Identity Vote Frames | `identity.vote_min_frames` |
 

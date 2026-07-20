@@ -102,6 +102,11 @@ juggle:
   # ("lost"). Raise if the ball detection is intermittent (ball vanishes between
   # contacts); too high will chain unrelated touches into one streak.
   lost_frames_reset: 15
+  # Bridge SHORT ball-detection dropouts: for up to this many consecutive
+  # missing frames, predict the ball's position (constant velocity from the last
+  # detections) so a brief blackout mid-arc doesn't break counting. 0 disables.
+  # Keep modest — a juggle arc is short; large values invent phantom positions.
+  max_bridge_frames: 8
 
 home_assistant:
   enabled: true
