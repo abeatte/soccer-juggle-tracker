@@ -419,9 +419,41 @@ class Pipeline:
         self.db.close()
 
 
+def _prune_old_clips(directory: str, retention_days: int) -> None:
+    """Delete video files older than ``retention_days`` from ``directory``.
+
+    ``retention_days <= 0`` disables pruning (keep forever). Only touches video
+    files; ignores other files and any I/O errors so it can never break the
+    worker."""
+    if retention_days <= 0:
+        return
+    cutoff = time.time() - retention_days * 86400
+    exts = (".mp4", ".mkv", ".mov", ".avi")
+    removed = 0
+    try:
+        entries = os.listdir(directory)
+    except OSError:
+        return
+    for name in entries:
+        if not name.lower().endswith(exts):
+            continue
+        path = os.path.join(directory, name)
+        try:
+            if os.path.isfile(path) and os.path.getmtime(path) < cutoff:
+                os.remove(path)
+                removed += 1
+        except OSError:
+            continue
+    if removed:
+        print(f"  [retention] removed {removed} clip(s) older than "
+              f"{retention_days}d from {directory}", flush=True)
+
+
 def move_to_processed(cfg: Config, clip_path: str) -> str:
     dst_dir = cfg.capture.processed_dir
     os.makedirs(dst_dir, exist_ok=True)
     dst = os.path.join(dst_dir, os.path.basename(clip_path))
     shutil.move(clip_path, dst)
+    # Enforce retention on the processed folder (0 = keep forever).
+    _prune_old_clips(dst_dir, int(cfg.capture.get("processed_retention_days", 0) or 0))
     return dst

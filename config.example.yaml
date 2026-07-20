@@ -22,6 +22,10 @@ capture:
   clip_seconds: 20       # length of a motion-triggered clip (short = faster turnaround)
   inbox_dir: "/srv/juggle_inbox"        # new clips land here (shared with the HA container)
   processed_dir: "/srv/juggle_processed"  # clips are moved here after analysis
+  # Auto-delete processed clips older than this many days (checked after each
+  # clip is moved). 0 = keep forever. Your high-score replays live in
+  # highscore_dir and are never pruned by this.
+  processed_retention_days: 0
   # High-score replay clips: one file per kid (<highscore_dir>/<slug>.mp4),
   # overwritten in place each time the record is beaten (only the latest is
   # kept). Bind-mount this host dir into HA at /config/www/juggle so the clips
