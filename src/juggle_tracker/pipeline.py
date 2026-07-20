@@ -266,6 +266,18 @@ class Pipeline:
     def _draw(self, img, det, ball_xy, ball_bridged, kps, counter, active_track,
               writer, path):
         vis = img.copy()
+        h_img, w_img = vis.shape[:2]
+        # ROI border — the analysis frame IS the ROI crop, so this hugs the edge
+        # (a reminder of what's in play). Ground line = floor-touch boundary.
+        cv2.rectangle(vis, (1, 1), (w_img - 2, h_img - 2), (200, 200, 200), 1)
+        cv2.putText(vis, "ROI", (4, 14), cv2.FONT_HERSHEY_SIMPLEX, 0.4,
+                    (200, 200, 200), 1)
+        gyf = float(self.cfg.juggle.get("ground_y_frac", 0.92))
+        if gyf < 1.0:
+            gy = int(gyf * h_img)
+            cv2.line(vis, (0, gy), (w_img, gy), (0, 0, 255), 1)
+            cv2.putText(vis, "ground", (4, max(12, gy - 4)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
         for p in det.persons:
             x0, y0, x1, y1 = (int(v) for v in p.xyxy)
             color = (0, 255, 0) if p.track_id == active_track else (160, 160, 160)
@@ -284,6 +296,13 @@ class Pipeline:
             cv2.circle(vis, (bx, by), 8, color, 1)
             cv2.putText(vis, label, (bx + 10, by),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
+        # Fallback search window (where the classical detector looks next frame).
+        if self.ball_fallback.enabled and ball_xy is not None:
+            sr = int(self.ball_fallback.search_radius)
+            if sr > 0:
+                cx, cy = int(ball_xy[0]), int(ball_xy[1])
+                cv2.rectangle(vis, (cx - sr, cy - sr), (cx + sr, cy + sr),
+                              (255, 255, 0), 1)
         if kps:
             for _, (x, y, c) in kps.items():
                 if c >= 0.2:
