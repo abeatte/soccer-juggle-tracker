@@ -22,6 +22,13 @@ The high-score sensor also carries a **`video_url`** attribute (and `updated`)
 pointing at that kid's most-recent high-score replay clip — see
 [High-score replay videos](#high-score-replay-videos) below.
 
+There is also a reserved **`sensor.unknown_juggler_juggle_high_score`** (icon
+`mdi:help-circle-outline`). Any session the tracker can't attribute to an
+enrolled kid is credited to this **Unknown Juggler** catch-all — it accrues its
+own score, high score, and replay video exactly like an enrolled profile. It has
+no enrolled face, so it never steals a match from a real kid and never counts
+against `identity.max_people`.
+
 Plus two raw topics:
 
 - `juggle_tracker/last_session` (retained JSON) — summary of the most recent clip:

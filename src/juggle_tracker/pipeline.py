@@ -109,6 +109,10 @@ class Pipeline:
         self._cur_pct: Optional[float] = None
         # Reflect persisted timing stats in HA immediately on startup.
         self.ha.publish_timing(*self.db.process_time_stats())
+        # Announce every profile (enrolled + the Unknown catch-all) up front so
+        # their sensors exist right after a service restart, not only after the
+        # next clip. Retained + idempotent.
+        self.ha.sync_all(self.db.list_people())
         self.thermal = ThermalGuard.from_config(
             cfg.raw,
             on_pause=self._on_thermal_pause,
@@ -227,6 +231,10 @@ class Pipeline:
     # ------------------------------------------------------------------
     def _record(self, session_id, track_id, event, streaks, new_highs):
         pid = self.resolver.resolve(track_id) if self.resolver else None
+        if pid is None:
+            # Couldn't attribute to an enrolled kid -> the catch-all profile,
+            # so unattributed juggles still accrue a score/high-score/video.
+            pid = self.db.unknown_person_id
         is_high = self.db.record_attempt(
             session_id, pid, track_id, event.count, event.ended_reason
         )

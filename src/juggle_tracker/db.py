@@ -20,6 +20,11 @@ from typing import Iterable, Optional
 
 import numpy as np
 
+# Reserved profile that catches every juggle session we can't attribute to an
+# enrolled person. It's a normal `people` row but has NO face embeddings, so it
+# can never be a match target — it only ever receives the `pid is None` fallback.
+UNKNOWN_NAME = "Unknown Juggler"
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS people (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -68,6 +73,9 @@ class Database:
         self._ensure_column("people", "high_clip", "TEXT")
         self._ensure_column("people", "high_clip_at", "REAL")
         self.conn.commit()
+        # Guarantee the catch-all profile exists so it shows alongside enrolled
+        # kids. It has no embeddings, so the face gallery ignores it.
+        self.unknown_person_id = self.add_person(UNKNOWN_NAME)
 
     def _ensure_column(self, table: str, col: str, decl: str) -> None:
         cols = [r["name"] for r in self.conn.execute(f"PRAGMA table_info({table})")]

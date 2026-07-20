@@ -19,6 +19,8 @@ import re
 import time
 from typing import Optional
 
+from .db import UNKNOWN_NAME
+
 try:
     import paho.mqtt.client as mqtt
 except Exception:  # pragma: no cover - optional at import time
@@ -93,7 +95,7 @@ class HAPublisher:
             # so a Lovelace card / Markdown link can point at the latest clip.
             "json_attributes_topic": f"{self.node}/{slug}/high_attr",
             "unit_of_measurement": "juggles",
-            "icon": "mdi:soccer",
+            "icon": "mdi:help-circle-outline" if name == UNKNOWN_NAME else "mdi:soccer",
             "state_class": "measurement",
             "device": self._device(),
         }

@@ -21,13 +21,15 @@ from .config import load_config
 
 def _enroll(args) -> int:
     import cv2
-    from .db import Database
+    from .db import Database, UNKNOWN_NAME
     from .identity import FaceEngine
 
     cfg = load_config(args.config)
     db = Database(cfg.database.path)
 
-    people = db.list_people()
+    # The reserved catch-all profile is not an enrolled person and must not
+    # count against the max_people cap.
+    people = [p for p in db.list_people() if p["name"] != UNKNOWN_NAME]
     if len(people) >= int(cfg.identity.get("max_people", 4)) and \
             args.name not in [p["name"] for p in people]:
         print(f"Max people ({cfg.identity.get('max_people')}) reached.", file=sys.stderr)
