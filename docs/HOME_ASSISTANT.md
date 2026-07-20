@@ -124,35 +124,41 @@ sudo chmod 755 /srv/juggle_highscores
 ### Step 3a — embedded video window (per kid)
 
 Because each kid's clip has a **stable path**, the card URL is fixed. An
-`iframe` card renders the browser's native video player inline:
+`iframe` card renders the browser's native video player inline. Use an
+**origin-relative** URL (leading `/`, no host) so it works over both HTTP and
+HTTPS, and add a **`visibility`** condition so the card only appears once that
+kid actually has a replay — the tracker publishes `video_url` as an empty string
+until a clip exists, so `attribute video_url != ""` is an exact "has a replay"
+test:
 
 ```yaml
 type: iframe
-url: http://192.168.0.139:8123/local/juggle/artie.mp4   # one per kid
-aspect_ratio: 56%    # 16:9
+url: /local/juggle/artie.mp4          # one per kid; origin-relative
+aspect_ratio: 56%                     # 16:9
 title: Artie — best juggle run
-```
-
-Pair each with its score in a stack:
-
-```yaml
-type: vertical-stack
-cards:
-  - type: entity
+visibility:
+  - condition: state
     entity: sensor.artie_juggle_high_score
-    name: Artie
-  - type: iframe
-    url: http://192.168.0.139:8123/local/juggle/artie.mp4
-    aspect_ratio: 56%
+    attribute: video_url
+    state_not: ""
 ```
 
 The **Unknown Juggler** catch-all works the same way — use
 `sensor.unknown_juggler_juggle_high_score` and
-`http://192.168.0.139:8123/local/juggle/unknown_juggler.mp4`.
+`/local/juggle/unknown_juggler.mp4`.
 
-> Since the file keeps the same name when overwritten, a browser may show a
-> cached older clip — hard-refresh (Ctrl/Cmd-Shift-R) if needed. The Markdown
-> card below avoids this by using the `?v=` cache-busted `video_url` attribute.
+On the **Sections** dashboard, put each `iframe` in its own `grid` section; a
+section whose only card is hidden collapses, so profiles without a replay simply
+don't show. (If your HA build's condition editor lacks the `attribute` option,
+the equivalent belt-and-suspenders is `condition: numeric_state … above: 0` on
+the high-score sensor — approximate, since a `backfill-unknown` score has no
+clip.)
+
+> `video_url` is only reliably present after the worker has published at least
+> once (restart `juggle-tracker.service` after upgrading). The `?v=` in
+> `video_url` also busts the browser cache when a clip is overwritten; a plain
+> hard-coded `iframe url` keeps the same filename, so hard-refresh
+> (Ctrl/Cmd-Shift-R) if you ever see a stale clip.
 
 ### Step 3b — Markdown links (auto-lists every kid)
 

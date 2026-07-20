@@ -107,17 +107,23 @@ class HAPublisher:
             return
         slug = _slug(name)
         self.client.publish(f"{self.node}/{slug}/high", high_score, retain=True)
-        # Publish the replay attributes. The version query param busts the
-        # browser cache each time the clip is overwritten with a new record.
+        # Always publish the attributes so `video_url` is present on every
+        # profile — a non-empty string when a replay clip exists, else "". This
+        # lets HA cards show/hide strictly on replay presence
+        # (attribute video_url != ""). The version query param busts the browser
+        # cache each time the clip is overwritten with a new record.
         if has_clip:
             ver = int(updated or time.time())
             url = f"{self.media_base.rstrip('/')}/{slug}.mp4?v={ver}"
-            self.client.publish(
-                f"{self.node}/{slug}/high_attr",
-                json.dumps({"high_score": high_score, "video_url": url,
-                            "updated": ver}),
-                retain=True,
-            )
+        else:
+            ver = int(updated) if updated else 0
+            url = ""
+        self.client.publish(
+            f"{self.node}/{slug}/high_attr",
+            json.dumps({"high_score": high_score, "video_url": url,
+                        "updated": ver}),
+            retain=True,
+        )
 
     def publish_session(self, results: list[dict]) -> None:
         """Publish a summary of the just-processed clip."""
