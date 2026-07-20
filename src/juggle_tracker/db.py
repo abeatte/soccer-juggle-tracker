@@ -142,6 +142,29 @@ class Database:
         )
         self.conn.commit()
 
+    def backfill_unknown_attempts(self) -> tuple[int, int]:
+        """One-time: credit historical unattributed (NULL) attempts to the
+        Unknown Juggler profile and recompute its high score.
+
+        Returns (reassigned_count, new_high_score). Idempotent — after the first
+        run there are no NULL-person attempts left to move. Does NOT create a
+        replay video for the historical best (its source clip may already be
+        gone); new sessions generate videos normally."""
+        uid = self.unknown_person_id
+        cur = self.conn.execute(
+            "UPDATE attempts SET person_id = ? WHERE person_id IS NULL", (uid,)
+        )
+        reassigned = cur.rowcount or 0
+        row = self.conn.execute(
+            "SELECT MAX(count) AS m FROM attempts WHERE person_id = ?", (uid,)
+        ).fetchone()
+        high = int(row["m"]) if row and row["m"] is not None else 0
+        self.conn.execute(
+            "UPDATE people SET high_score = ? WHERE id = ?", (high, uid)
+        )
+        self.conn.commit()
+        return reassigned, high
+
     # ---- sessions / attempts -------------------------------------------
     def start_session(self, clip_path: str, fps: float) -> int:
         cur = self.conn.execute(

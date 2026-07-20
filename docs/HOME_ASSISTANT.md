@@ -50,6 +50,7 @@ entities:
   - entity: sensor.kid2_juggle_high_score
   - entity: sensor.kid3_juggle_high_score
   - entity: sensor.kid4_juggle_high_score
+  - entity: sensor.unknown_juggler_juggle_high_score   # catch-all for unattributed runs
 ```
 
 ## High-score replay videos
@@ -145,6 +146,10 @@ cards:
     aspect_ratio: 56%
 ```
 
+The **Unknown Juggler** catch-all works the same way — use
+`sensor.unknown_juggler_juggle_high_score` and
+`http://192.168.0.139:8123/local/juggle/unknown_juggler.mp4`.
+
 > Since the file keeps the same name when overwritten, a browser may show a
 > cached older clip — hard-refresh (Ctrl/Cmd-Shift-R) if needed. The Markdown
 > card below avoids this by using the `?v=` cache-busted `video_url` attribute.
@@ -153,7 +158,8 @@ cards:
 
 This card reads the `video_url` attribute (which includes a `?v=` cache-buster)
 off the sensors, so it always links the freshest clip and needs no per-kid
-editing:
+editing — the **Unknown Juggler** is included automatically since it also matches
+`_juggle_high_score`:
 
 ```yaml
 type: markdown

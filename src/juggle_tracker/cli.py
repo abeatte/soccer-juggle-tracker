@@ -4,6 +4,7 @@
     python -m juggle_tracker.cli process CLIP.mp4        [--debug-video out.mp4]
     python -m juggle_tracker.cli watch                    # batch worker: watch inbox
     python -m juggle_tracker.cli scores                   # print the scoreboard
+    python -m juggle_tracker.cli backfill-unknown         # credit old NULL streaks to Unknown
     python -m juggle_tracker.cli record  --seconds 30     # grab a clip from RTSP
     python -m juggle_tracker.cli doctor                   # preflight env checks
     python -m juggle_tracker.cli bench                     # model FPS + per-clip estimate
@@ -172,6 +173,20 @@ def _scores(args) -> int:
     for i, r in enumerate(rows, 1):
         print(f"{i:<5}{r['name']:<16}{r['high_score']:>10}")
     db.close()
+    return 0
+
+
+def _backfill_unknown(args) -> int:
+    from .db import Database, UNKNOWN_NAME
+
+    cfg = load_config(args.config)
+    db = Database(cfg.database.path)
+    reassigned, high = db.backfill_unknown_attempts()
+    db.close()
+    print(f"Backfill: reassigned {reassigned} unattributed attempt(s) to "
+          f"'{UNKNOWN_NAME}'. High score is now {high}.")
+    print("Restart juggle-tracker.service (or process any clip) to publish the "
+          "updated score to Home Assistant.")
     return 0
 
 
@@ -425,6 +440,11 @@ def main(argv=None) -> int:
 
     ps = sub.add_parser("scores", help="Print the high-score board")
     ps.set_defaults(func=_scores)
+
+    pbu = sub.add_parser("backfill-unknown",
+                         help="One-time: credit historical unattributed streaks "
+                              "to the Unknown Juggler profile")
+    pbu.set_defaults(func=_backfill_unknown)
 
     pr = sub.add_parser("record", help="Record a clip from the camera RTSP")
     pr.add_argument("--seconds", type=int, default=0)
