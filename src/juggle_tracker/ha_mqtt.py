@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sqlite3
 import time
 from typing import Optional
 
@@ -71,6 +72,11 @@ class HAPublisher:
         self.announce_status()
         self.announce_timing()
         self.publish_status("idle")
+        # Listen for "reset high score" button presses from HA. The button
+        # publishes the target person's slug to this shared command topic.
+        self.cmd_topic = f"{self.node}/reset/set"
+        self.client.on_message = self._on_reset_message
+        self.client.subscribe(self.cmd_topic)
 
     # ------------------------------------------------------------------
     def _device(self) -> dict:
@@ -124,6 +130,71 @@ class HAPublisher:
                         "updated": ver}),
             retain=True,
         )
+
+    def announce_reset_button(self, name: str) -> None:
+        """Publish MQTT discovery for a per-person 'reset high score' button."""
+        if not self.enabled:
+            return
+        slug = _slug(name)
+        topic = f"{self.prefix}/button/{self.node}/{slug}_reset/config"
+        payload = {
+            "name": f"Reset {name} High Score",
+            "unique_id": f"{self.node}_{slug}_reset",
+            "command_topic": self.cmd_topic,
+            "payload_press": slug,          # tells the worker which person to reset
+            "icon": "mdi:trophy-broken",
+            "availability_topic": self.avail_topic,
+            "device": self._device(),
+        }
+        self.client.publish(topic, json.dumps(payload), retain=True)
+
+    def _on_reset_message(self, client, userdata, msg) -> None:
+        """MQTT callback: a reset button was pressed (payload = person slug)."""
+        try:
+            slug = msg.payload.decode().strip()
+            if slug:
+                self._reset_person(slug)
+        except Exception as exc:  # never let a bad message kill the loop
+            print(f"  [reset] error handling reset command: {exc}", flush=True)
+
+    def _reset_person(self, slug: str) -> None:
+        """Zero a person's high score, delete their replay clip, and re-publish.
+
+        Runs in the MQTT network thread, so it uses its own short-lived SQLite
+        connection rather than sharing the pipeline's."""
+        name = None
+        pid = None
+        try:
+            conn = sqlite3.connect(self.cfg.database.path, timeout=5)
+            try:
+                conn.row_factory = sqlite3.Row
+                for r in conn.execute("SELECT id, name FROM people"):
+                    if _slug(r["name"]) == slug:
+                        pid, name = int(r["id"]), r["name"]
+                        break
+                if pid is None:
+                    print(f"  [reset] no person matches slug '{slug}'", flush=True)
+                    return
+                conn.execute(
+                    "UPDATE people SET high_score = 0, high_clip = NULL, "
+                    "high_clip_at = NULL WHERE id = ?", (pid,)
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        except Exception as exc:
+            print(f"  [reset] DB update failed for '{slug}': {exc}", flush=True)
+            return
+        # Delete the replay clip so the iframe/link disappears.
+        hs_dir = self.cfg.capture.get("highscore_dir", "highscores")
+        try:
+            os.remove(os.path.join(hs_dir, f"{slug}.mp4"))
+        except OSError:
+            pass
+        # Re-publish retained state (0) + empty video_url so HA updates now.
+        self.publish_high(name, 0, has_clip=False)
+        print(f"  [reset] {name}: high score cleared and replay removed",
+              flush=True)
 
     def publish_session(self, results: list[dict]) -> None:
         """Publish a summary of the just-processed clip."""
@@ -254,6 +325,7 @@ class HAPublisher:
         for p in people:
             name = p["name"]
             self.announce_person(name)
+            self.announce_reset_button(name)
             self.publish_high(
                 name,
                 int(p["high_score"]),

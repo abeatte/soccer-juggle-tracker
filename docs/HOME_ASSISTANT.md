@@ -182,6 +182,42 @@ content: >
   {% endif %}
 ```
 
+## Reset buttons (clear a high score + replay)
+
+For every profile (each kid **and** Unknown Juggler) the tracker also publishes
+a **button** entity via MQTT discovery:
+
+| Entity | Example |
+|---|---|
+| `button.reset_<person>_high_score` | `button.reset_artie_high_score` |
+
+Pressing it tells the worker to **zero that person's high score, delete their
+replay clip, and re-publish** (score → 0, `video_url` → `""`) so the sensor and
+any iframe/link update immediately. It only works while
+`juggle-tracker.service` is running (the button shows *unavailable* when the
+worker is offline). History (`attempts`) is left intact — the score just starts
+climbing again from 0.
+
+Add them to a dashboard however you like, e.g. a button per kid:
+
+```yaml
+type: horizontal-stack
+cards:
+  - type: button
+    entity: button.reset_artie_high_score
+    name: Reset Artie
+    icon: mdi:trophy-broken
+  - type: button
+    entity: button.reset_unknown_juggler_high_score
+    name: Reset Unknown
+    icon: mdi:trophy-broken
+```
+
+> Under the hood: each button publishes the person's slug to
+> `juggle_tracker/reset/set`, which the worker is subscribed to. The exact
+> `button.` entity IDs may be device-prefixed (like your sensors) — grab them
+> from Developer Tools → States (filter `reset`).
+
 ## New-high-score announcement (TTS)
 
 Trigger off the event topic and speak it on a media player:
