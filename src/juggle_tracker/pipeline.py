@@ -166,6 +166,10 @@ class Pipeline:
                                        current=self._cur_clip, frame=frame.index,
                                        total=self._cur_total)
                 self.thermal.maybe_wait()
+                # Keep the inbox/processed queue sensors live during long runs
+                # (a clip can take many minutes on this box).
+                if frame.index % 250 == 0:
+                    self.ha.publish_queues()
             if counter is None:
                 counter = self._new_counter(h)
 
@@ -287,6 +291,7 @@ class Pipeline:
             ground_y_frac=float(j.get("ground_y_frac", 0.92)),
             valid_keypoints=set(j.get("valid_keypoints", [])) or None,
             illegal_keypoints=set(j.get("illegal_keypoints", [])) or None,
+            lost_frames_reset=int(j.get("lost_frames_reset", 15)),
         )
 
     def _render_annotated(self, clip_path: str, out_path: str) -> None:

@@ -252,6 +252,7 @@ sit in the device's *Configuration* section):
 | Juggle Min Arc Height (px) | `juggle.min_arc_px` |
 | Juggle Ground Line (frac) | `juggle.ground_y_frac` |
 | Juggle Smoothing Window | `juggle.smooth_window` |
+| Juggle Lost-Ball Frames | `juggle.lost_frames_reset` |
 | Juggle Face Match Threshold | `identity.match_threshold` |
 | Juggle Identity Vote Frames | `identity.vote_min_frames` |
 

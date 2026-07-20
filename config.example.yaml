@@ -98,6 +98,10 @@ juggle:
   # Ground plane: image-y (fraction of frame height) at/below which a ball low
   # point counts as a FLOOR touch → reset. Calibrate to your yard. 1.0 disables.
   ground_y_frac: 0.92
+  # Frames the ball may be UNDETECTED before the current streak is abandoned
+  # ("lost"). Raise if the ball detection is intermittent (ball vanishes between
+  # contacts); too high will chain unrelated touches into one streak.
+  lost_frames_reset: 15
 
 home_assistant:
   enabled: true
