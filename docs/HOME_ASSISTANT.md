@@ -18,6 +18,10 @@ For each enrolled person, on the first processed clip:
 |---|---|---|
 | `sensor.<person>_juggle_high_score` | `sensor.kid1_juggle_high_score` | All-time best streak (unit: juggles) |
 
+The high-score sensor also carries a **`video_url`** attribute (and `updated`)
+pointing at that kid's most-recent high-score replay clip — see
+[High-score replay videos](#high-score-replay-videos) below.
+
 Plus two raw topics:
 
 - `juggle_tracker/last_session` (retained JSON) — summary of the most recent clip:
@@ -39,6 +43,119 @@ entities:
   - entity: sensor.kid2_juggle_high_score
   - entity: sensor.kid3_juggle_high_score
   - entity: sensor.kid4_juggle_high_score
+```
+
+## High-score replay videos
+
+When a kid beats their record, the tracker saves a short **replay clip** of that
+run and Home Assistant can play it — either inline in a card or via a link.
+
+- **One clip per kid**, at `<highscore_dir>/<slug>.mp4` (e.g. `artie.mp4`). It is
+  **overwritten in place** each time the record is beaten, so only the latest is
+  kept and the old clip is discarded automatically.
+- By default the clip is an **annotated overlay** (ball tracking, pose dots, live
+  streak counter) rendered as a quick second pass — and *only* for record-setting
+  clips, so the extra CPU/heat on the old laptop is paid rarely. Set
+  `capture.annotate_highscore: false` to just copy the raw clip instead.
+- The tracker publishes the clip's URL as the **`video_url`** attribute on that
+  kid's `sensor.<person>_juggle_high_score` entity.
+
+### Step 1 — serve the clips to HA (`www` bind-mount)
+
+Same idea as the shared inbox: HA is in Docker, so bind-mount the host
+`highscore_dir` into HA's `www/` folder. Files under `www/` are served at
+`/local/...`, which is exactly what an HTML5 `<video>`/iframe needs.
+
+```yaml
+# docker-compose.yml for Home Assistant — add one volume line:
+services:
+  homeassistant:
+    volumes:
+      - /srv/juggle_inbox:/media/juggle_inbox          # (existing) inbox
+      - /srv/juggle_highscores:/config/www/juggle:ro   # <-- add this (read-only)
+```
+
+Recreate the HA container so the mount takes effect. Clips then load at:
+
+```
+http://<ha-host>:8123/local/juggle/<slug>.mp4     e.g. .../local/juggle/artie.mp4
+```
+
+> `/config/www` is served by HA at `/local/`. A one-time HA restart is needed
+> after first adding the `www` folder/mount, but new/overwritten clips inside it
+> appear without a restart.
+
+### Step 2 — point the tracker at the same host dir
+
+In `config.yaml`:
+
+```yaml
+capture:
+  highscore_dir: "/srv/juggle_highscores"
+  save_highscore_video: true
+  annotate_highscore: true          # false = raw clip, no second pass
+home_assistant:
+  # Browser-reachable base URL for the clips (matches the mount above).
+  media_base_url: "http://192.168.0.139:8123/local/juggle"
+```
+
+Permissions mirror the inbox — the native tracker writes the clips, the HA
+container only reads them (mounted `:ro`):
+
+```bash
+sudo mkdir -p /srv/juggle_highscores
+sudo chown -R $USER:$USER /srv/juggle_highscores
+sudo chmod 755 /srv/juggle_highscores
+```
+
+### Step 3a — embedded video window (per kid)
+
+Because each kid's clip has a **stable path**, the card URL is fixed. An
+`iframe` card renders the browser's native video player inline:
+
+```yaml
+type: iframe
+url: http://192.168.0.139:8123/local/juggle/artie.mp4   # one per kid
+aspect_ratio: 56%    # 16:9
+title: Artie — best juggle run
+```
+
+Pair each with its score in a stack:
+
+```yaml
+type: vertical-stack
+cards:
+  - type: entity
+    entity: sensor.artie_juggle_high_score
+    name: Artie
+  - type: iframe
+    url: http://192.168.0.139:8123/local/juggle/artie.mp4
+    aspect_ratio: 56%
+```
+
+> Since the file keeps the same name when overwritten, a browser may show a
+> cached older clip — hard-refresh (Ctrl/Cmd-Shift-R) if needed. The Markdown
+> card below avoids this by using the `?v=` cache-busted `video_url` attribute.
+
+### Step 3b — Markdown links (auto-lists every kid)
+
+This card reads the `video_url` attribute (which includes a `?v=` cache-buster)
+off the sensors, so it always links the freshest clip and needs no per-kid
+editing:
+
+```yaml
+type: markdown
+title: ⚽ High-score replays
+content: >
+  {% set kids = states.sensor
+       | selectattr('entity_id','search','_juggle_high_score')
+       | sort(attribute='state', reverse=true) | list %}
+  {% if kids | length == 0 %}No scores yet.{% else %}
+  {%- for k in kids %}
+  - **{{ k.attributes.friendly_name | replace(' Juggle High Score','') }}** —
+  {{ k.state }} juggles{% if k.attributes.video_url %} · [▶ watch]({{ k.attributes.video_url }}){% endif %}
+  {%- endfor %}
+  {% endif %}
 ```
 
 ## New-high-score announcement (TTS)

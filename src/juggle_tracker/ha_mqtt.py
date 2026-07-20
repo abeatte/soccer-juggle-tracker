@@ -35,6 +35,12 @@ class HAPublisher:
         self.enabled = bool(cfg.home_assistant.get("enabled", False))
         self.prefix = cfg.home_assistant.get("discovery_prefix", "homeassistant")
         self.node = cfg.home_assistant.get("node_id", "juggle_tracker")
+        # Base URL (as reached from a browser on the LAN) under which HA serves
+        # the high-score replay clips. With the recommended `www/juggle` mount
+        # this is http://<ha-host>:8123/local/juggle .
+        self.media_base = cfg.home_assistant.get(
+            "media_base_url", "http://192.168.0.139:8123/local/juggle"
+        )
         self.client = None
         if not self.enabled:
             return
@@ -83,6 +89,9 @@ class HAPublisher:
             "name": f"{name} Juggle High Score",
             "unique_id": f"{self.node}_{slug}_high",
             "state_topic": f"{self.node}/{slug}/high",
+            # Carries the replay `video_url` (+ updated ts) as sensor attributes
+            # so a Lovelace card / Markdown link can point at the latest clip.
+            "json_attributes_topic": f"{self.node}/{slug}/high_attr",
             "unit_of_measurement": "juggles",
             "icon": "mdi:soccer",
             "state_class": "measurement",
@@ -90,10 +99,23 @@ class HAPublisher:
         }
         self.client.publish(topic, json.dumps(payload), retain=True)
 
-    def publish_high(self, name: str, high_score: int) -> None:
+    def publish_high(self, name: str, high_score: int, has_clip: bool = False,
+                     updated: Optional[float] = None) -> None:
         if not self.enabled:
             return
-        self.client.publish(f"{self.node}/{_slug(name)}/high", high_score, retain=True)
+        slug = _slug(name)
+        self.client.publish(f"{self.node}/{slug}/high", high_score, retain=True)
+        # Publish the replay attributes. The version query param busts the
+        # browser cache each time the clip is overwritten with a new record.
+        if has_clip:
+            ver = int(updated or time.time())
+            url = f"{self.media_base.rstrip('/')}/{slug}.mp4?v={ver}"
+            self.client.publish(
+                f"{self.node}/{slug}/high_attr",
+                json.dumps({"high_score": high_score, "video_url": url,
+                            "updated": ver}),
+                retain=True,
+            )
 
     def publish_session(self, results: list[dict]) -> None:
         """Publish a summary of the just-processed clip."""
@@ -215,11 +237,21 @@ class HAPublisher:
             json.dumps({"person": name, "score": score, "ts": time.time()}),
         )
 
-    def sync_all(self, high_scores: dict[str, int]) -> None:
-        """(Re)announce and publish every enrolled person's high score."""
-        for name, score in high_scores.items():
+    def sync_all(self, people) -> None:
+        """(Re)announce and publish every enrolled person's high score.
+
+        ``people`` is an iterable of rows/dicts with ``name``, ``high_score``
+        and optional ``high_clip`` / ``high_clip_at`` (as returned by
+        ``Database.list_people``)."""
+        for p in people:
+            name = p["name"]
             self.announce_person(name)
-            self.publish_high(name, score)
+            self.publish_high(
+                name,
+                int(p["high_score"]),
+                has_clip=bool(p["high_clip"]) if "high_clip" in p.keys() else False,
+                updated=p["high_clip_at"] if "high_clip_at" in p.keys() else None,
+            )
 
     def close(self) -> None:
         if self.client is not None:

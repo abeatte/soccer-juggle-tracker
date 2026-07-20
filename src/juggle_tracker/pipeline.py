@@ -25,7 +25,7 @@ from .capture import FrameSource
 from .config import Config
 from .db import Database
 from .detect import Detector
-from .ha_mqtt import HAPublisher
+from .ha_mqtt import HAPublisher, _slug
 from .identity import (FaceEngine, Gallery, IdentityResolver, assign_face_to_track)
 from .juggle import JuggleCounter
 from .pose import PoseEstimator, person_center
@@ -162,15 +162,7 @@ class Pipeline:
                                        total=self._cur_total)
                 self.thermal.maybe_wait()
             if counter is None:
-                counter = JuggleCounter(
-                    frame_height=h,
-                    smooth_window=int(self.cfg.juggle.get("smooth_window", 5)),
-                    min_arc_px=float(self.cfg.juggle.get("min_arc_px", 18)),
-                    contact_radius_px=float(self.cfg.juggle.get("contact_radius_px", 90)),
-                    ground_y_frac=float(self.cfg.juggle.get("ground_y_frac", 0.92)),
-                    valid_keypoints=set(self.cfg.juggle.get("valid_keypoints", [])) or None,
-                    illegal_keypoints=set(self.cfg.juggle.get("illegal_keypoints", [])) or None,
-                )
+                counter = self._new_counter(h)
 
             det = self.detector.detect_track(img)
             ball_xy = det.ball.xy if det.ball else None
@@ -212,8 +204,13 @@ class Pipeline:
         if writer is not None:
             writer.release()
 
+        # Capture a replay clip for any new personal record BEFORE publishing,
+        # so the sensor attributes carry the fresh video URL.
+        if new_highs:
+            self._capture_highscore_videos(clip_path, new_highs)
+
         # Publish to Home Assistant.
-        self.ha.sync_all(self.db.high_scores())
+        self.ha.sync_all(self.db.list_people())
         self.ha.publish_session(streaks)
         for nh in new_highs:
             self.ha.fire_new_high_score(nh["person"], nh["score"])
@@ -243,7 +240,7 @@ class Pipeline:
             }
         )
         if is_high:
-            new_highs.append({"person": name, "score": event.count})
+            new_highs.append({"person": name, "score": event.count, "pid": pid})
 
     def _draw(self, img, det, kps, counter, active_track, writer, path):
         vis = img.copy()
@@ -268,6 +265,118 @@ class Pipeline:
             writer = cv2.VideoWriter(path, fourcc, 25.0, (w, h))
         writer.write(vis)
         return writer
+
+    # ------------------------------------------------------------------
+    def _new_counter(self, frame_height: int) -> JuggleCounter:
+        """Build a JuggleCounter from config (shared by process + render pass)."""
+        j = self.cfg.juggle
+        return JuggleCounter(
+            frame_height=frame_height,
+            smooth_window=int(j.get("smooth_window", 5)),
+            min_arc_px=float(j.get("min_arc_px", 18)),
+            contact_radius_px=float(j.get("contact_radius_px", 90)),
+            ground_y_frac=float(j.get("ground_y_frac", 0.92)),
+            valid_keypoints=set(j.get("valid_keypoints", [])) or None,
+            illegal_keypoints=set(j.get("illegal_keypoints", [])) or None,
+        )
+
+    def _render_annotated(self, clip_path: str, out_path: str) -> None:
+        """Second pass over a clip that writes ONLY an annotated overlay video.
+
+        Re-runs detection/pose/juggle-counting purely for the overlay (ball
+        circle, pose keypoints, active-track box, live streak counter). It does
+        NOT touch the database or publish scores — that already happened in the
+        first pass. Reuses the already-loaded models. Runs only for clips that
+        set a new record, so the cost is paid rarely. Honors the thermal guard."""
+        src = FrameSource(
+            clip_path,
+            roi=self.cfg.roi,
+            infer_long_edge=int(self.cfg.processing.get("infer_long_edge", 960)),
+        )
+        stride = max(1, int(self.cfg.processing.get("person_stride", 3)))
+        writer = None
+        counter: Optional[JuggleCounter] = None
+        active_track: Optional[int] = None
+        last_poses: dict[int, dict] = {}
+        try:
+            for frame in src:
+                img = frame.image
+                h = img.shape[0]
+                if frame.index % 50 == 0:
+                    self.thermal.maybe_wait()
+                if counter is None:
+                    counter = self._new_counter(h)
+                det = self.detector.detect_track(img)
+                ball_xy = det.ball.xy if det.ball else None
+                if frame.index % stride == 0 and det.persons:
+                    poses = self.pose.estimate(img)
+                    last_poses = _match_pose_to_track(poses, det.persons)
+                active = _nearest_person_to_ball(det.persons, ball_xy)
+                if active is not None:
+                    active_track = active.track_id
+                kps = last_poses.get(active_track) if active_track is not None else None
+                counter.update(frame.index, ball_xy, kps)
+                writer = self._draw(
+                    img, det, kps, counter, active_track, writer, out_path
+                )
+        finally:
+            src.release()
+            if writer is not None:
+                writer.release()
+
+    def _capture_highscore_videos(self, clip_path: str,
+                                  new_highs: list[dict]) -> None:
+        """Save/refresh the per-person high-score replay clip.
+
+        One file per person (``<highscore_dir>/<slug>.mp4``) is overwritten in
+        place via an atomic rename, so only the most-recent record clip is kept
+        and the previous one is discarded. When ``annotate_highscore`` is set we
+        do a quick annotated second pass; otherwise the raw clip is copied."""
+        cap = self.cfg.capture
+        if not bool(cap.get("save_highscore_video", True)):
+            return
+        hs_dir = cap.get("highscore_dir", "highscores")
+        annotate = bool(cap.get("annotate_highscore", True))
+        os.makedirs(hs_dir, exist_ok=True)
+        ts = time.time()
+        tmp = os.path.join(hs_dir, f".render_{int(ts)}.mp4")
+
+        try:
+            if annotate:
+                # Reflect the extra work in HA's worker-state sensor.
+                self.ha.publish_status("rendering", current=clip_path)
+                self._render_annotated(clip_path, tmp)
+                if not os.path.exists(tmp) or os.path.getsize(tmp) == 0:
+                    raise RuntimeError("annotated render produced no output")
+            else:
+                shutil.copyfile(clip_path, tmp)
+        except Exception as exc:  # fall back to the raw clip; never lose a record
+            print(f"  [highscore] annotate failed ({exc}); saving raw clip",
+                  flush=True)
+            try:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+                shutil.copyfile(clip_path, tmp)
+            except Exception as exc2:
+                print(f"  [highscore] could not save clip: {exc2}", flush=True)
+                return
+
+        try:
+            for nh in new_highs:
+                pid = nh.get("pid")
+                if pid is None:
+                    continue
+                slug = _slug(nh["person"])
+                final = os.path.join(hs_dir, f"{slug}.mp4")
+                stage = final + ".part"
+                shutil.copyfile(tmp, stage)
+                os.replace(stage, final)  # atomic overwrite -> old clip replaced
+                self.db.set_high_clip(pid, final, ts)
+                print(f"  [highscore] {nh['person']}: saved replay -> {final}",
+                      flush=True)
+        finally:
+            if os.path.exists(tmp):
+                os.remove(tmp)
 
     def close(self):
         self.ha.close()

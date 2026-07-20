@@ -102,6 +102,7 @@ def _resolve_paths(cfg: Config, root: str) -> None:
     cap = cfg.raw.setdefault("capture", {})
     cap["inbox_dir"] = abs_(cap.get("inbox_dir", "inbox"))
     cap["processed_dir"] = abs_(cap.get("processed_dir", "processed"))
+    cap["highscore_dir"] = abs_(cap.get("highscore_dir", "highscores"))
     mdl = cfg.raw.setdefault("models", {})
     for k in ("detector", "pose"):
         if mdl.get(k):

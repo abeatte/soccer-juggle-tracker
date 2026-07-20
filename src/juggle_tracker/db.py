@@ -62,6 +62,11 @@ class Database:
         self.conn.executescript(_SCHEMA)
         # Migrate older DBs that predate the duration_s column.
         self._ensure_column("sessions", "duration_s", "REAL NOT NULL DEFAULT 0")
+        # High-score replay clip: path to the most-recent high-score video for
+        # this person, and when it was captured (epoch). Overwritten in place
+        # whenever the record is beaten, so only the latest is ever kept.
+        self._ensure_column("people", "high_clip", "TEXT")
+        self._ensure_column("people", "high_clip_at", "REAL")
         self.conn.commit()
 
     def _ensure_column(self, table: str, col: str, decl: str) -> None:
@@ -109,7 +114,8 @@ class Database:
 
     def list_people(self) -> list[sqlite3.Row]:
         return self.conn.execute(
-            "SELECT id, name, high_score FROM people ORDER BY high_score DESC, name"
+            "SELECT id, name, high_score, high_clip, high_clip_at "
+            "FROM people ORDER BY high_score DESC, name"
         ).fetchall()
 
     def person_name(self, person_id: Optional[int]) -> str:
@@ -119,6 +125,14 @@ class Database:
             "SELECT name FROM people WHERE id = ?", (person_id,)
         ).fetchone()
         return row["name"] if row else "Unknown"
+
+    def set_high_clip(self, person_id: int, path: str, ts: float) -> None:
+        """Record the path + timestamp of a person's most-recent high-score clip."""
+        self.conn.execute(
+            "UPDATE people SET high_clip = ?, high_clip_at = ? WHERE id = ?",
+            (path, float(ts), person_id),
+        )
+        self.conn.commit()
 
     # ---- sessions / attempts -------------------------------------------
     def start_session(self, clip_path: str, fps: float) -> int:

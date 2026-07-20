@@ -20,8 +20,19 @@ camera:
 
 capture:
   clip_seconds: 20       # length of a motion-triggered clip (short = faster turnaround)
-  inbox_dir: "inbox"     # new clips land here (from HA/Reolink or manual copy)
-  processed_dir: "processed"   # clips are moved here after analysis
+  inbox_dir: "/srv/juggle_inbox"        # new clips land here (shared with the HA container)
+  processed_dir: "/srv/juggle_processed"  # clips are moved here after analysis
+  # High-score replay clips: one file per kid (<highscore_dir>/<slug>.mp4),
+  # overwritten in place each time the record is beaten (only the latest is
+  # kept). Bind-mount this host dir into HA at /config/www/juggle so the clips
+  # are served at http://<ha-host>:8123/local/juggle/<slug>.mp4 — see
+  # docs/HOME_ASSISTANT.md.
+  highscore_dir: "/srv/juggle_highscores"
+  save_highscore_video: true   # capture a replay clip when a record is set
+  # true  = quick annotated second pass (ball/pose/streak overlay) — only runs
+  #         for record-setting clips, so the extra CPU/heat is paid rarely.
+  # false = just copy the raw clip (zero extra processing).
+  annotate_highscore: true
 
 # Region of interest in the frame, as fractions [0-1]: x0,y0,x1,y1.
 # Crop to just the play area to cut CPU cost and false detections.
@@ -92,6 +103,11 @@ home_assistant:
   mqtt_password: "CHANGE_ME"
   discovery_prefix: "homeassistant"   # HA MQTT discovery topic root
   node_id: "juggle_tracker"
+  # Base URL (as seen from a browser on your LAN) where HA serves the
+  # high-score replay clips. With the recommended www/juggle mount this is
+  # http://<ha-host>:8123/local/juggle . Published as the `video_url` attribute
+  # on each kid's high-score sensor.
+  media_base_url: "http://192.168.0.139:8123/local/juggle"
 
 database:
   path: "data/juggle.db"
