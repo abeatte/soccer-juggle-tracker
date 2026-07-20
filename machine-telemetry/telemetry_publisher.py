@@ -164,15 +164,26 @@ def read_cpu_temp() -> Optional[float]:
 
 
 def read_fan_rpm() -> Optional[int]:
-    """Max fan RPM from the applesmc hwmon (MacBook)."""
-    hw = _hwmon_by_name()
-    node = hw.get("applesmc")
+    """Max fan RPM across all fans.
+
+    On MacBooks the `applesmc` driver exposes fans at its *platform* path
+    (/sys/devices/platform/applesmc.*/fan*_input), NOT under /sys/class/hwmon,
+    so check there first, then fall back to any hwmon exposing fan*_input
+    (covers boards where the fan is a proper hwmon device).
+    """
     rpms: list[int] = []
-    # Search applesmc first, then any hwmon exposing fan*_input.
-    candidates = [node] if node else list(_hwmon_by_name().values())
-    for n in candidates:
-        if not n:
-            continue
+
+    # 1. applesmc platform path (MacBook) — e.g. applesmc.768/fan1_input
+    for f in Path("/sys/devices/platform").glob("applesmc.*/fan*_input"):
+        try:
+            rpms.append(int(f.read_text()))
+        except Exception:
+            pass
+    if rpms:
+        return max(rpms)
+
+    # 2. Fallback: any hwmon node exposing fan*_input
+    for n in _hwmon_by_name().values():
         for f in n.glob("fan*_input"):
             try:
                 rpms.append(int(f.read_text()))
