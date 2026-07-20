@@ -38,7 +38,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     clip_path   TEXT NOT NULL,
     started_at  REAL NOT NULL,
     frames      INTEGER NOT NULL DEFAULT 0,
-    fps         REAL NOT NULL DEFAULT 0
+    fps         REAL NOT NULL DEFAULT 0,
+    duration_s  REAL NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS attempts (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -59,7 +60,15 @@ class Database:
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
         self.conn.executescript(_SCHEMA)
+        # Migrate older DBs that predate the duration_s column.
+        self._ensure_column("sessions", "duration_s", "REAL NOT NULL DEFAULT 0")
         self.conn.commit()
+
+    def _ensure_column(self, table: str, col: str, decl: str) -> None:
+        cols = [r["name"] for r in self.conn.execute(f"PRAGMA table_info({table})")]
+        if col not in cols:
+            self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+            self.conn.commit()
 
     # ---- people / enrollment -------------------------------------------
     def add_person(self, name: str) -> int:
@@ -120,11 +129,28 @@ class Database:
         self.conn.commit()
         return int(cur.lastrowid)
 
-    def finish_session(self, session_id: int, frames: int) -> None:
+    def finish_session(self, session_id: int, frames: int,
+                       duration_s: float = 0.0) -> None:
         self.conn.execute(
-            "UPDATE sessions SET frames = ? WHERE id = ?", (frames, session_id)
+            "UPDATE sessions SET frames = ?, duration_s = ? WHERE id = ?",
+            (frames, float(duration_s), session_id),
         )
         self.conn.commit()
+
+    def process_time_stats(self) -> tuple[float, float, int]:
+        """Return (last_seconds, avg_seconds, count) over timed sessions."""
+        last_row = self.conn.execute(
+            "SELECT duration_s FROM sessions WHERE duration_s > 0 "
+            "ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        agg = self.conn.execute(
+            "SELECT AVG(duration_s) AS a, COUNT(*) AS c "
+            "FROM sessions WHERE duration_s > 0"
+        ).fetchone()
+        last = float(last_row["duration_s"]) if last_row else 0.0
+        avg = float(agg["a"]) if agg and agg["a"] is not None else 0.0
+        count = int(agg["c"]) if agg else 0
+        return round(last, 1), round(avg, 1), count
 
     def record_attempt(
         self,

@@ -49,6 +49,7 @@ class HAPublisher:
             self.client.username_pw_set(user, pw)
         self.avail_topic = f"{self.node}/availability"
         self.status_topic = f"{self.node}/status"
+        self.timing_topic = f"{self.node}/timing"
         # Last-Will so HA shows the worker offline if it dies ungracefully.
         self.client.will_set(self.avail_topic, "offline", retain=True)
         self.client.connect(
@@ -60,6 +61,7 @@ class HAPublisher:
         # Announce the worker status/progress entities and mark online + idle.
         self.client.publish(self.avail_topic, "online", retain=True)
         self.announce_status()
+        self.announce_timing()
         self.publish_status("idle")
 
     # ------------------------------------------------------------------
@@ -153,6 +155,57 @@ class HAPublisher:
         if temp_c is not None:
             payload["temp_c"] = round(temp_c, 1)
         self.client.publish(self.status_topic, json.dumps(payload), retain=True)
+
+    # ------------------------------------------------------------------
+    def announce_timing(self) -> None:
+        """Discovery for last / average clip processing-time sensors."""
+        if not self.enabled:
+            return
+        dev = self._device()
+        common = {
+            "device_class": "duration",
+            "unit_of_measurement": "s",
+            "state_class": "measurement",
+            "availability_topic": self.avail_topic,
+            "device": dev,
+        }
+        self.client.publish(
+            f"{self.prefix}/sensor/{self.node}/last_process_time/config",
+            json.dumps({
+                "name": "Juggle Last Process Time",
+                "unique_id": f"{self.node}_last_process_time",
+                "state_topic": self.timing_topic,
+                "value_template": "{{ value_json.last_seconds | default(0) }}",
+                "json_attributes_topic": self.timing_topic,
+                "icon": "mdi:timer-outline",
+                **common,
+            }), retain=True)
+        self.client.publish(
+            f"{self.prefix}/sensor/{self.node}/avg_process_time/config",
+            json.dumps({
+                "name": "Juggle Average Process Time",
+                "unique_id": f"{self.node}_avg_process_time",
+                "state_topic": self.timing_topic,
+                "value_template": "{{ value_json.avg_seconds | default(0) }}",
+                "icon": "mdi:timer-sand",
+                **common,
+            }), retain=True)
+
+    def publish_timing(self, last_seconds: float, avg_seconds: float,
+                       count: int) -> None:
+        """Publish last + average clip processing time (retained JSON)."""
+        if not self.enabled:
+            return
+        self.client.publish(
+            self.timing_topic,
+            json.dumps({
+                "last_seconds": last_seconds,
+                "avg_seconds": avg_seconds,
+                "count": count,
+                "ts": time.time(),
+            }),
+            retain=True,
+        )
 
     def fire_new_high_score(self, name: str, score: int) -> None:
         if not self.enabled:

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import time
 from dataclasses import dataclass
 from typing import Optional
 
@@ -105,6 +106,8 @@ class Pipeline:
         self._cur_total: int = 0
         self._cur_frame: int = 0
         self._cur_pct: Optional[float] = None
+        # Reflect persisted timing stats in HA immediately on startup.
+        self.ha.publish_timing(*self.db.process_time_stats())
         self.thermal = ThermalGuard.from_config(
             cfg.raw,
             on_pause=self._on_thermal_pause,
@@ -126,6 +129,7 @@ class Pipeline:
         )
         stride = max(1, int(self.cfg.processing.get("person_stride", 3)))
         session_id = self.db.start_session(clip_path, src.fps)
+        t0 = time.perf_counter()
 
         writer = None
         counter: Optional[JuggleCounter] = None
@@ -203,7 +207,7 @@ class Pipeline:
             if ev is not None and ev.count > 0:
                 self._record(session_id, active_track, ev, streaks, new_highs)
 
-        self.db.finish_session(session_id, n_frames)
+        self.db.finish_session(session_id, n_frames, time.perf_counter() - t0)
         src.release()
         if writer is not None:
             writer.release()
@@ -217,6 +221,8 @@ class Pipeline:
         # Back to idle (progress 0) now the clip is done.
         self.ha.publish_status("idle", progress=0)
         self._cur_clip = None
+        # Publish last + average processing time (persisted across restarts).
+        self.ha.publish_timing(*self.db.process_time_stats())
 
         return ClipResult(clip_path, n_frames, streaks, new_highs)
 
