@@ -198,7 +198,9 @@ any iframe/link update immediately. It only works while
 worker is offline). History (`attempts`) is left intact — the score just starts
 climbing again from 0.
 
-Add them to a dashboard however you like, e.g. a button per kid:
+Add them to a dashboard however you like, e.g. a button per kid with a
+confirmation prompt (the confirmation is a Lovelace `tap_action` feature — no
+tracker change needed):
 
 ```yaml
 type: horizontal-stack
@@ -207,10 +209,24 @@ cards:
     entity: button.reset_artie_high_score
     name: Reset Artie
     icon: mdi:trophy-broken
+    tap_action:
+      action: perform-action
+      perform_action: button.press
+      target:
+        entity_id: button.reset_artie_high_score
+      confirmation:
+        text: Reset Artie's high score and delete the replay?
   - type: button
     entity: button.reset_unknown_juggler_high_score
     name: Reset Unknown
     icon: mdi:trophy-broken
+    tap_action:
+      action: perform-action
+      perform_action: button.press
+      target:
+        entity_id: button.reset_unknown_juggler_high_score
+      confirmation:
+        text: Reset the Unknown Juggler high score and delete the replay?
 ```
 
 > Under the hood: each button publishes the person's slug to
