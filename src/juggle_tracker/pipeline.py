@@ -100,11 +100,21 @@ class Pipeline:
                 vote_min_frames=int(cfg.identity.get("vote_min_frames", 3)),
             )
         self.ha = HAPublisher(cfg)
+        # Live status published to HA (idle / processing / cooldown + progress).
+        self._cur_clip: Optional[str] = None
+        self._cur_total: int = 0
+        self._cur_frame: int = 0
+        self._cur_pct: Optional[float] = None
         self.thermal = ThermalGuard.from_config(
             cfg.raw,
-            on_pause=lambda t: print(
-                f"  [thermal] {t:.0f}C >= limit; pausing to cool...", flush=True
-            ),
+            on_pause=self._on_thermal_pause,
+        )
+
+    def _on_thermal_pause(self, t: float) -> None:
+        print(f"  [thermal] {t:.0f}C >= limit; pausing to cool...", flush=True)
+        self.ha.publish_status(
+            "cooldown", progress=self._cur_pct, current=self._cur_clip,
+            frame=self._cur_frame, total=self._cur_total, temp_c=t,
         )
 
     # ------------------------------------------------------------------
@@ -125,12 +135,27 @@ class Pipeline:
         last_poses: dict[int, dict] = {}
         n_frames = 0
 
+        # Publish "processing" + reset progress (total frames from the clip header).
+        total = src.frame_count if getattr(src, "frame_count", 0) > 0 else 0
+        self._cur_clip = clip_path
+        self._cur_total = total
+        self._cur_frame = 0
+        self._cur_pct = 0.0
+        self.ha.publish_status("processing", progress=0.0, current=clip_path,
+                               frame=0, total=total)
+
         for frame in src:
             n_frames += 1
             img = frame.image
             h, w = img.shape[:2]
             # Thermal safety: check every ~2s of video and block if overheating.
             if frame.index % 50 == 0:
+                self._cur_frame = frame.index
+                self._cur_pct = (round(100.0 * frame.index / self._cur_total, 1)
+                                 if self._cur_total else None)
+                self.ha.publish_status("processing", progress=self._cur_pct,
+                                       current=self._cur_clip, frame=frame.index,
+                                       total=self._cur_total)
                 self.thermal.maybe_wait()
             if counter is None:
                 counter = JuggleCounter(
@@ -188,6 +213,10 @@ class Pipeline:
         self.ha.publish_session(streaks)
         for nh in new_highs:
             self.ha.fire_new_high_score(nh["person"], nh["score"])
+
+        # Back to idle (progress 0) now the clip is done.
+        self.ha.publish_status("idle", progress=0)
+        self._cur_clip = None
 
         return ClipResult(clip_path, n_frames, streaks, new_highs)
 
