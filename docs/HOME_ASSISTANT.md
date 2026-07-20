@@ -171,7 +171,7 @@ content: >
   {% if kids | length == 0 %}No scores yet.{% else %}
   {%- for k in kids %}
   - **{{ k.attributes.friendly_name | replace(' Juggle High Score','') }}** —
-  {{ k.state }} juggles{% if k.attributes.video_url %} · [▶ watch]({{ k.attributes.video_url }}){% endif %}
+  {{ k.state }} juggles{% if k.attributes.get('video_url') %} · [▶ watch]({{ k.attributes.get('video_url') }}){% endif %}
   {%- endfor %}
   {% endif %}
 ```
