@@ -291,6 +291,54 @@ entities:
 > ROI (play-area box) and keypoint ("dots") toggles are **not** here yet — those
 > get the visual editor in Phase 2.
 
+## Queues & reprocessing
+
+The worker publishes two queue sensors (updated every watch cycle) and a
+reprocess control:
+
+| Entity | What |
+|---|---|
+| `sensor.juggle_inbox_queue` | Count of clips waiting in the inbox (state), with a `files` attribute listing them |
+| `sensor.juggle_processed_count` | Count of already-processed clips (state) + `files` attribute (newest first, capped at 100) |
+| `select.juggle_reprocess_file` | Dropdown of processed filenames (refreshed each cycle) |
+| `button.reprocess_selected_clip` | Re-runs the selected clip |
+
+**Reprocess** moves the chosen processed clip back into the inbox, so the normal
+watcher re-runs it **end-to-end with the current (possibly just-calibrated)
+config** — taking every action a fresh run does (updating high scores, writing
+the replay video, publishing to HA). Pick a file in the select, then press the
+button.
+
+Dashboard example (verify device-prefixed IDs in Developer Tools → States):
+
+```yaml
+type: entities
+title: 📥 Queue & Reprocess
+entities:
+  - entity: sensor.juggle_inbox_queue
+  - entity: sensor.juggle_processed_count
+  - type: divider
+  - entity: select.juggle_reprocess_file
+  - entity: button.reprocess_selected_clip
+```
+
+List the actual inbox filenames with a Markdown card reading the attribute:
+
+```yaml
+type: markdown
+title: 📥 Inbox
+content: >
+  {% set f = state_attr('sensor.juggle_inbox_queue','files') or [] %}
+  **{{ f | length }} waiting**
+  {% for name in f %}
+  - {{ name }}
+  {% endfor %}
+```
+
+> Typical calibration loop: tweak the Calibration numbers → **Apply & Restart** →
+> pick a clip in **Reprocess File** → **Reprocess Selected Clip** → watch the new
+> count + replay. Re-running always uses the latest config.
+
 ## New-high-score announcement (TTS)
 
 Trigger off the event topic and speak it on a media player:

@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import sqlite3
 import subprocess
 import time
@@ -88,6 +89,15 @@ class HAPublisher:
             self.client.subscribe(self.apply_topic)
             self.client.subscribe(self.revert_topic)
             self.announce_calibration()
+        # Inbox/processed queue sensors + reprocess-a-clip control.
+        self.reprocess_topic = f"{self.node}/reprocess/set"
+        self.reprocess_select_topic = f"{self.node}/reprocess_select/set"
+        self._reprocess_selected: Optional[str] = None
+        self._last_select_options: Optional[list] = None
+        self.client.subscribe(self.reprocess_topic)
+        self.client.subscribe(self.reprocess_select_topic)
+        self.announce_queues()
+        self.publish_queues()
 
     # ------------------------------------------------------------------
     def _device(self) -> dict:
@@ -167,6 +177,12 @@ class HAPublisher:
             if topic == self.cmd_topic:
                 if payload:
                     self._reset_person(payload)
+            elif topic == self.reprocess_topic:
+                self._do_reprocess()
+            elif topic == self.reprocess_select_topic:
+                self._reprocess_selected = payload or None
+                self.client.publish(f"{self.node}/reprocess_select", payload,
+                                    retain=True)
             elif not self.calib_enabled:
                 return
             elif topic == self.apply_topic:
@@ -324,6 +340,130 @@ class HAPublisher:
             print(f"  [calib] 'systemctl --user restart {svc}' failed ({exc}); "
                   f"exiting so systemd Restart=always relaunches", flush=True)
             os._exit(0)
+
+    # ------------------------------------------------------------------
+    def _list_videos(self, directory: Optional[str]) -> list[str]:
+        """Basenames of video files in a dir, newest first."""
+        exts = (".mp4", ".mkv", ".mov", ".avi")
+        if not directory or not os.path.isdir(directory):
+            return []
+        items = []
+        for name in os.listdir(directory):
+            if name.lower().endswith(exts):
+                p = os.path.join(directory, name)
+                try:
+                    items.append((os.path.getmtime(p), name))
+                except OSError:
+                    continue
+        items.sort(reverse=True)
+        return [n for _, n in items]
+
+    def announce_queues(self) -> None:
+        """Discovery for the inbox-queue + processed-count sensors and the
+        reprocess select + button."""
+        if not self.enabled:
+            return
+        dev = self._device()
+        self.client.publish(
+            f"{self.prefix}/sensor/{self.node}/inbox_queue/config",
+            json.dumps({
+                "name": "Juggle Inbox Queue",
+                "unique_id": f"{self.node}_inbox_queue",
+                "state_topic": f"{self.node}/inbox",
+                "value_template": "{{ value_json.count }}",
+                "json_attributes_topic": f"{self.node}/inbox",
+                "unit_of_measurement": "clips",
+                "icon": "mdi:tray-full",
+                "availability_topic": self.avail_topic,
+                "device": dev,
+            }), retain=True)
+        self.client.publish(
+            f"{self.prefix}/sensor/{self.node}/processed_count/config",
+            json.dumps({
+                "name": "Juggle Processed Count",
+                "unique_id": f"{self.node}_processed_count",
+                "state_topic": f"{self.node}/processed",
+                "value_template": "{{ value_json.count }}",
+                "json_attributes_topic": f"{self.node}/processed",
+                "unit_of_measurement": "clips",
+                "icon": "mdi:tray-arrow-down",
+                "availability_topic": self.avail_topic,
+                "device": dev,
+            }), retain=True)
+        self.client.publish(
+            f"{self.prefix}/button/{self.node}/reprocess/config",
+            json.dumps({
+                "name": "Reprocess Selected Clip",
+                "unique_id": f"{self.node}_reprocess",
+                "command_topic": self.reprocess_topic,
+                "payload_press": "reprocess",
+                "icon": "mdi:reload",
+                "entity_category": "config",
+                "availability_topic": self.avail_topic,
+                "device": dev,
+            }), retain=True)
+
+    def _announce_reprocess_select(self, options: list) -> None:
+        """(Re)publish the reprocess `select` discovery with current options."""
+        self.client.publish(
+            f"{self.prefix}/select/{self.node}/reprocess_file/config",
+            json.dumps({
+                "name": "Juggle Reprocess File",
+                "unique_id": f"{self.node}_reprocess_file",
+                "state_topic": f"{self.node}/reprocess_select",
+                "command_topic": self.reprocess_select_topic,
+                "options": options,
+                "icon": "mdi:file-refresh",
+                "entity_category": "config",
+                "availability_topic": self.avail_topic,
+                "device": self._device(),
+            }), retain=True)
+
+    def publish_queues(self) -> None:
+        """Publish inbox + processed listings and refresh the reprocess select.
+
+        Called by the watcher each cycle. State is a count; the filenames ride
+        as a `files` attribute (capped to keep the MQTT payload small)."""
+        if not self.enabled:
+            return
+        infiles = self._list_videos(self.cfg.capture.get("inbox_dir"))
+        pfiles = self._list_videos(self.cfg.capture.get("processed_dir"))
+        self.client.publish(
+            f"{self.node}/inbox",
+            json.dumps({"count": len(infiles), "files": infiles[:100]}),
+            retain=True)
+        self.client.publish(
+            f"{self.node}/processed",
+            json.dumps({"count": len(pfiles), "files": pfiles[:100]}),
+            retain=True)
+        # Keep the reprocess dropdown in sync (cap options; HA selects need >=1).
+        opts = pfiles[:50] if pfiles else ["(none)"]
+        if opts != self._last_select_options:
+            self._announce_reprocess_select(opts)
+            self._last_select_options = opts
+
+    def _do_reprocess(self) -> None:
+        """Move the selected processed clip back into the inbox so the normal
+        watcher re-runs it end-to-end with the current config."""
+        sel = self._reprocess_selected
+        if not sel or sel == "(none)":
+            print("  [reprocess] no clip selected", flush=True)
+            return
+        name = os.path.basename(sel)  # guard against path traversal
+        processed = self.cfg.capture.get("processed_dir")
+        inbox = self.cfg.capture.get("inbox_dir")
+        src = os.path.join(processed, name)
+        if not os.path.isfile(src):
+            print(f"  [reprocess] '{name}' not found in processed", flush=True)
+            return
+        try:
+            os.makedirs(inbox, exist_ok=True)
+            shutil.move(src, os.path.join(inbox, name))
+            print(f"  [reprocess] {name} -> inbox; will re-run with current config",
+                  flush=True)
+            self.publish_queues()  # reflect the move immediately
+        except Exception as exc:
+            print(f"  [reprocess] failed to requeue '{name}': {exc}", flush=True)
 
     # ------------------------------------------------------------------
     def publish_session(self, results: list[dict]) -> None:

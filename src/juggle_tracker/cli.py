@@ -120,6 +120,7 @@ def _watch(args) -> int:
     os.makedirs(inbox, exist_ok=True)
     print(f"Watching {inbox} for new clips (Ctrl-C to stop)...")
     pipe = Pipeline(cfg)
+    pipe.ha.publish_queues()
     try:
         while True:
             clips = []
@@ -137,6 +138,8 @@ def _watch(args) -> int:
                     move_to_processed(cfg, clip)
                 except Exception as exc:  # keep the worker alive
                     print(f"   ERROR processing {clip}: {exc}", file=sys.stderr)
+            # Refresh the inbox/processed queue sensors in HA each cycle.
+            pipe.ha.publish_queues()
             time.sleep(args.interval)
     except KeyboardInterrupt:
         print("\nStopping watcher.")
