@@ -113,11 +113,20 @@ else warn "docker" "not found (only needed for the HA/Matter side)"; fi
 
 # --- Camera RTSP (needs RTSP_URL) -----------------------------------------
 if [ -n "${RTSP_URL:-}" ]; then
-  if have ffmpeg; then
-    if timeout 20 ffmpeg -rtsp_transport tcp -i "$RTSP_URL" -frames:v 1 -f null - >/dev/null 2>&1; then
+  # Prefer ffprobe (reads stream metadata only — no decode, so a 4K HEVC main
+  # stream on a slow CPU won't stall). -timeout is a socket timeout (µs) so a
+  # dead/stalled stream aborts itself; timeout -k force-kills if it ignores TERM.
+  if have ffprobe; then
+    if timeout -k 5 20 ffprobe -rtsp_transport tcp -timeout 5000000 \
+         -i "$RTSP_URL" -show_entries stream=codec_name -of csv=p=0 -v error >/dev/null 2>&1; then
+      pass "camera RTSP" "connected + read stream info"
+    else fail "camera RTSP" "could not open stream (check IP/creds/RTSP path/network)"; fi
+  elif have ffmpeg; then
+    if timeout -k 5 20 ffmpeg -rtsp_transport tcp -timeout 5000000 \
+         -i "$RTSP_URL" -frames:v 1 -f null - >/dev/null 2>&1; then
       pass "camera RTSP" "connected + decoded a frame"
     else fail "camera RTSP" "could not pull a frame (check IP/creds/RTSP enabled/network)"; fi
-  else warn "camera RTSP" "install ffmpeg to test the stream"; fi
+  else warn "camera RTSP" "install ffmpeg/ffprobe to test the stream"; fi
 else warn "camera RTSP" "set RTSP_URL=... to test the camera"; fi
 
 # --- MQTT broker (needs MQTT_HOST) ----------------------------------------
