@@ -8,6 +8,7 @@
     python -m juggle_tracker.cli record  --seconds 30     # grab a clip from RTSP
     python -m juggle_tracker.cli doctor                   # preflight env checks
     python -m juggle_tracker.cli bench                     # model FPS + per-clip estimate
+    python -m juggle_tracker.cli tune CLIPS_DIR [--write]  # auto-calibrate from labelled clips
 """
 from __future__ import annotations
 
@@ -204,6 +205,11 @@ def _record(args) -> int:
     record_clip(cfg.camera.rtsp_main, out, secs)
     print("Done.")
     return 0
+
+
+def _tune(args) -> int:
+    from . import tune
+    return tune.run(args)
 
 
 def _bench(args) -> int:
@@ -459,6 +465,12 @@ def main(argv=None) -> int:
     pb = sub.add_parser("bench", help="Benchmark model FPS + estimate per-clip time")
     pb.add_argument("--iters", type=int, default=20)
     pb.set_defaults(func=_bench)
+
+    ptune = sub.add_parser(
+        "tune", help="Auto-calibrate detection params against labelled clips")
+    from . import tune as _tune_mod
+    _tune_mod.add_arguments(ptune)
+    ptune.set_defaults(func=_tune)
 
     args = p.parse_args(argv)
     return args.func(args)
