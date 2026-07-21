@@ -70,7 +70,36 @@ TUNABLE_PARAMS = [
     {"path": ("ball_fallback", "search_radius"), "slug": "fallback_search_radius",
      "min": 20, "max": 400, "step": 10, "int": True,
      "name": "Ball CV Search Radius", "icon": "mdi:image-filter-center-focus"},
+    {"path": ("ball_fallback", "min_radius"), "slug": "fallback_min_radius",
+     "min": 1, "max": 60, "step": 1, "int": True,
+     "name": "Ball CV Min Radius", "icon": "mdi:circle-small"},
+    {"path": ("ball_fallback", "hough_param1"), "slug": "fallback_hough_param1",
+     "min": 20, "max": 300, "step": 5, "int": False,
+     "name": "Ball CV Edge Threshold", "icon": "mdi:image-filter-black-white"},
+    {"path": ("ball_fallback", "dp"), "slug": "fallback_dp",
+     "min": 1.0, "max": 3.0, "step": 0.1, "int": False,
+     "name": "Ball CV Accumulator (dp)", "icon": "mdi:grid"},
+    {"path": ("identity", "max_people"), "slug": "max_people",
+     "min": 1, "max": 10, "step": 1, "int": True,
+     "name": "Max People", "icon": "mdi:account-group"},
+    {"path": ("processing", "torch_threads"), "slug": "torch_threads",
+     "min": 0, "max": 16, "step": 1, "int": True,
+     "name": "Torch Threads", "icon": "mdi:cpu-64-bit"},
+    {"path": ("thermal", "max_temp_c"), "slug": "thermal_max_temp_c",
+     "min": 60, "max": 100, "step": 1, "int": True,
+     "name": "Thermal Max Temp (C)", "icon": "mdi:thermometer-alert"},
+    {"path": ("thermal", "resume_temp_c"), "slug": "thermal_resume_temp_c",
+     "min": 50, "max": 95, "step": 1, "int": True,
+     "name": "Thermal Resume Temp (C)", "icon": "mdi:thermometer-low"},
 ]
+
+# Slug for the ball-fallback ON/OFF *switch* (a boolean, so it is NOT part of
+# TUNABLE_PARAMS which only produces numeric `number` entities). Handled as a
+# special case in the calibration command router. Toggling it writes
+# ball_fallback.enabled to the overrides file; it activates on Apply & Restart,
+# exactly like the numeric calibration entities.
+BALL_FALLBACK_ENABLED_SLUG = "ball_fallback_enabled"
+BALL_FALLBACK_ENABLED_PATH = ("ball_fallback", "enabled")
 
 _PARAM_BY_SLUG = {p["slug"]: p for p in TUNABLE_PARAMS}
 

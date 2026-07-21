@@ -286,10 +286,26 @@ sit in the device's *Configuration* section):
 | Juggle Ball CV Sensitivity | `ball_fallback.hough_param2` (lower = more circles) |
 | Juggle Ball CV Max Radius | `ball_fallback.max_radius` |
 | Juggle Ball CV Search Radius | `ball_fallback.search_radius` |
+| Juggle Ball CV Min Radius | `ball_fallback.min_radius` |
+| Juggle Ball CV Edge Threshold | `ball_fallback.hough_param1` (Canny high threshold) |
+| Juggle Ball CV Accumulator (dp) | `ball_fallback.dp` (Hough inverse accumulator resolution) |
+| Juggle Max People | `identity.max_people` |
+| Juggle Torch Threads | `processing.torch_threads` (0 = auto) |
+| Juggle Thermal Max Temp (C) | `thermal.max_temp_c` (pause above this) |
+| Juggle Thermal Resume Temp (C) | `thermal.resume_temp_c` (resume below this) |
 
-The **Ball CV** numbers only take effect when `ball_fallback.enabled: true` in
-`config.yaml` — a classical OpenCV Hough-circle detector that runs only on
-frames where YOLO misses the ball (complements it on blurry/small-ball frames).
+There is also one **switch** in the same config section:
+
+| Entity (switch) | Config key |
+|---|---|
+| Juggle Ball CV Fallback | `ball_fallback.enabled` (turn the classical fallback on/off) |
+
+The **Ball CV** numbers only take effect when the **Juggle Ball CV Fallback**
+switch is ON (i.e. `ball_fallback.enabled: true`) — a classical OpenCV
+Hough-circle detector that runs only on frames where YOLO misses the ball
+(complements it on blurry/small-ball frames). The switch honors the same
+Apply & Restart flow as the numbers, so you no longer need to hand-edit
+`calibration_overrides.yaml` to toggle it.
 
 Plus buttons **Apply Calibration & Restart** and **Revert Calibration to
 Defaults**.

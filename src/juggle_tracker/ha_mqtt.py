@@ -288,6 +288,26 @@ class HAPublisher:
             # Seed the current value so HA shows what actually produced results.
             val = cfgmod.get_by_path(self.cfg.raw, spec["path"], spec["min"])
             self.client.publish(f"{self.node}/config/{slug}", val, retain=True)
+        # Ball-fallback ON/OFF switch (boolean — not a numeric `number` entity).
+        # Lives in the same config section and honors the Apply & Restart flow.
+        fb_slug = cfgmod.BALL_FALLBACK_ENABLED_SLUG
+        self.client.publish(
+            f"{self.prefix}/switch/{self.node}/cfg_{fb_slug}/config",
+            json.dumps({
+                "name": "Juggle Ball CV Fallback",
+                "unique_id": f"{self.node}_cfg_{fb_slug}",
+                "state_topic": f"{self.node}/config/{fb_slug}",
+                "command_topic": f"{self.node}/config/{fb_slug}/set",
+                "payload_on": "ON", "payload_off": "OFF",
+                "icon": "mdi:circle-double",
+                "entity_category": "config",
+                "availability_topic": self.avail_topic,
+                "device": dev,
+            }), retain=True)
+        fb_on = bool(cfgmod.get_by_path(
+            self.cfg.raw, cfgmod.BALL_FALLBACK_ENABLED_PATH, False))
+        self.client.publish(f"{self.node}/config/{fb_slug}",
+                            "ON" if fb_on else "OFF", retain=True)
         # Apply & Restart button.
         self.client.publish(
             f"{self.prefix}/button/{self.node}/apply_restart/config",
@@ -318,6 +338,22 @@ class HAPublisher:
     def _handle_config_set(self, slug: str, payload: str) -> None:
         """Persist an edited calibration value to the overrides file (no restart
         — it activates on the next Apply & Restart)."""
+        # Boolean ball-fallback switch: not in TUNABLE_PARAMS, handle explicitly.
+        if slug == cfgmod.BALL_FALLBACK_ENABLED_SLUG:
+            on = payload.strip().upper() in ("ON", "1", "TRUE")
+            try:
+                cfgmod.set_override(
+                    self.cfg.overrides_path,
+                    cfgmod.BALL_FALLBACK_ENABLED_PATH, on)
+            except Exception as exc:
+                print(f"  [calib] failed to save ball_fallback.enabled: {exc}",
+                      flush=True)
+                return
+            self.client.publish(f"{self.node}/config/{slug}",
+                                "ON" if on else "OFF", retain=True)
+            print(f"  [calib] ball_fallback.enabled -> {on} (saved; press "
+                  f"Apply & Restart to activate)", flush=True)
+            return
         spec = cfgmod.param_for_slug(slug)
         if spec is None:
             print(f"  [calib] unknown param '{slug}'", flush=True)
