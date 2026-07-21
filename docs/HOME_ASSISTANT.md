@@ -123,19 +123,47 @@ sudo chmod 755 /srv/juggle_highscores
 
 ### Step 3a — embedded video window (per kid)
 
-Because each kid's clip has a **stable path**, the card URL is fixed. An
-`iframe` card renders the browser's native video player inline. Use an
-**origin-relative** URL (leading `/`, no host) so it works over both HTTP and
-HTTPS, and add a **`visibility`** condition so the card only appears once that
-kid actually has a replay — the tracker publishes `video_url` as an empty string
-until a clip exists, so `attribute video_url != ""` is an exact "has a replay"
-test:
+Each kid's clip has a **stable path** (`/local/juggle/<slug>.mp4`). A plain
+`iframe` card with that fixed URL gets **cached by the browser** — when the file
+is overwritten with a new record the iframe keeps showing the old clip (or a
+black frame). The sensor's `video_url` attribute already carries a
+`?v=<timestamp>` cache-buster that changes on every new record, but the native
+`iframe` card can't read an entity attribute, so it never sees the new URL.
+
+Drive the URL from that attribute with
+[`config-template-card`](https://github.com/iantrich/config-template-card)
+(install via HACS). It re-renders when the listed entity changes, so the iframe
+`src` (and thus the video) reloads whenever a record is beaten — no manual
+refresh, no stale/black clip:
 
 ```yaml
-type: iframe
-url: /local/juggle/artie.mp4          # one per kid; origin-relative
-aspect_ratio: 56%                     # 16:9
-title: Artie — best juggle run
+type: custom:config-template-card
+entities:
+  - sensor.artie_juggle_high_score      # re-render trigger
+card:
+  type: iframe
+  aspect_ratio: 56%                     # 16:9
+  title: Artie — best juggle run
+  # origin-relative URL + ?v= buster, straight off the sensor attribute
+  url: >-
+    ${ states['sensor.artie_juggle_high_score'].attributes.video_url }
+```
+
+Add a **`visibility`** condition on the wrapper so the card only appears once
+that kid actually has a replay — the tracker publishes `video_url` as `""` until
+a clip exists, so `attribute video_url != ""` is an exact "has a replay" test
+(a single string value, **not** a YAML list — HA rejects a list here):
+
+```yaml
+type: custom:config-template-card
+entities:
+  - sensor.artie_juggle_high_score
+card:
+  type: iframe
+  aspect_ratio: 56%
+  title: Artie — best juggle run
+  url: >-
+    ${ states['sensor.artie_juggle_high_score'].attributes.video_url }
 visibility:
   - condition: state
     entity: sensor.artie_juggle_high_score
@@ -144,21 +172,20 @@ visibility:
 ```
 
 The **Unknown Juggler** catch-all works the same way — use
-`sensor.unknown_juggler_juggle_high_score` and
-`/local/juggle/unknown_juggler.mp4`.
+`sensor.unknown_juggler_juggle_high_score`.
 
-On the **Sections** dashboard, put each `iframe` in its own `grid` section; a
+On the **Sections** dashboard, put each wrapper in its own `grid` section; a
 section whose only card is hidden collapses, so profiles without a replay simply
-don't show. (If your HA build's condition editor lacks the `attribute` option,
-the equivalent belt-and-suspenders is `condition: numeric_state … above: 0` on
-the high-score sensor — approximate, since a `backfill-unknown` score has no
-clip.)
+don't show.
 
+> **No-HACS alternative:** a Markdown card with an HTML5 `<video>` also picks up
+> the `?v=` buster —
+> `<video controls preload="metadata" width="100%" src="{{ state_attr('sensor.artie_juggle_high_score','video_url') }}"></video>`
+> — but some HA versions' Markdown sanitizer strips `<video>`; if it renders
+> blank, use `config-template-card` above.
+>
 > `video_url` is only reliably present after the worker has published at least
-> once (restart `juggle-tracker.service` after upgrading). The `?v=` in
-> `video_url` also busts the browser cache when a clip is overwritten; a plain
-> hard-coded `iframe url` keeps the same filename, so hard-refresh
-> (Ctrl/Cmd-Shift-R) if you ever see a stale clip.
+> once (restart `juggle-tracker.service` after upgrading).
 
 ### Step 3b — Markdown links (auto-lists every kid)
 
@@ -344,24 +371,37 @@ entities:
   - entity: button.reprocess_selected_clip
 ```
 
-Show the annotated replay in its own window. The iframe is hidden until a
-reprocess has produced one (visibility keyed on the `video_url` attribute):
+Show the annotated replay in its own window. Use `config-template-card` (HACS)
+so the iframe URL comes from the sensor's `video_url` attribute — this both
+hides it until a reprocess has produced a clip and picks up the `?v=`
+cache-buster so an overwritten replay actually reloads (a plain `iframe` with a
+fixed URL would show the cached/old clip):
 
 ```yaml
-type: iframe
-url: /local/juggle/last_reprocessed.mp4
-aspect_ratio: 56%
-title: 🎬 Last Annotated Reprocess
+type: custom:config-template-card
+entities:
+  - sensor.juggle_last_reprocessed
+card:
+  type: iframe
+  aspect_ratio: 56%
+  title: 🎬 Last Annotated Reprocess
+  url: >-
+    ${ states['sensor.juggle_last_reprocessed'].attributes.video_url }
 visibility:
   - condition: state
     entity: sensor.juggle_last_reprocessed
-    attribute: video_url
-    state_not: ""
+    state_not: unknown
+  - condition: state
+    entity: sensor.juggle_last_reprocessed
+    state_not: unavailable
 ```
 
-> The `?v=` cache-buster on `video_url` changes every reprocess; the iframe's
-> hard-coded `url` keeps the same filename, so hard-refresh (Ctrl-Shift-R) if a
-> newly overwritten replay doesn't update.
+> Unlike the per-kid high-score sensors, `last_reprocessed` isn't seeded on
+> startup, so its `video_url` attribute is absent until the first reprocess.
+> That's why visibility here keys on the **state** (`unknown`/`unavailable`)
+> rather than the `video_url` attribute — an absent attribute is `!= ""` and
+> would make the card show prematurely. The two single-string `state_not`
+> conditions are ANDed (a YAML list under one `state_not` is rejected by HA).
 
 List the actual inbox filenames with a Markdown card reading the attribute:
 
