@@ -446,7 +446,12 @@ class Pipeline:
             ["ffmpeg", "-y", "-loglevel", "error", "-i", src,
              "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
              "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
-             "-movflags", "+faststart", "-an", dst],
+             # Force the mp4 muxer explicitly: the reprocess path transcodes to a
+             # `last_reprocessed.mp4.part` staging file, and ffmpeg otherwise
+             # infers the container from the extension — `.part` is unknown, so
+             # it aborts with "Unable to choose an output format" (exit 234)
+             # before encoding. `-f mp4` makes the output name irrelevant.
+             "-movflags", "+faststart", "-an", "-f", "mp4", dst],
             check=True,
         )
 
