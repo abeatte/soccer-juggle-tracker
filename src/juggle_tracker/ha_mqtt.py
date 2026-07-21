@@ -31,6 +31,13 @@ except Exception:  # pragma: no cover - optional at import time
     mqtt = None
 
 
+# Placeholder option for the reprocess dropdown meaning "nothing selected".
+# Always kept as the first option so there's a valid state to reset to after a
+# reprocess requeues (and thus de-lists) the chosen file — otherwise HA would
+# keep showing the now-missing filename as selected.
+SELECT_NONE = "(none)"
+
+
 def _slug(name: str) -> str:
     return re.sub(r"[^a-z0-9_]+", "_", name.strip().lower()).strip("_")
 
@@ -190,9 +197,11 @@ class HAPublisher:
             elif topic == self.reprocess_topic:
                 self._do_reprocess()
             elif topic == self.reprocess_select_topic:
-                self._reprocess_selected = payload or None
-                self.client.publish(f"{self.node}/reprocess_select", payload,
-                                    retain=True)
+                self._reprocess_selected = (
+                    None if (not payload or payload == SELECT_NONE) else payload
+                )
+                self.client.publish(f"{self.node}/reprocess_select",
+                                    payload or SELECT_NONE, retain=True)
             elif topic == self.reprocess_annotate_topic:
                 self._reprocess_annotate = payload.upper() in ("ON", "1", "TRUE")
                 self.client.publish(
@@ -452,6 +461,9 @@ class HAPublisher:
                 "availability_topic": self.avail_topic,
                 "device": dev,
             }), retain=True)
+        # Start the reprocess dropdown with a clean (nothing-selected) state.
+        self.client.publish(f"{self.node}/reprocess_select", SELECT_NONE,
+                            retain=True)
 
     def _announce_reprocess_select(self, options: list) -> None:
         """(Re)publish the reprocess `select` discovery with current options."""
@@ -486,8 +498,10 @@ class HAPublisher:
             f"{self.node}/processed",
             json.dumps({"count": len(pfiles), "files": pfiles[:100]}),
             retain=True)
-        # Keep the reprocess dropdown in sync (cap options; HA selects need >=1).
-        opts = pfiles[:50] if pfiles else ["(none)"]
+        # Keep the reprocess dropdown in sync. Always include the "(none)"
+        # placeholder as the first option so there's a valid "nothing selected"
+        # state to fall back to after a reprocess requeues the chosen file.
+        opts = [SELECT_NONE] + pfiles[:50]
         if opts != self._last_select_options:
             self._announce_reprocess_select(opts)
             self._last_select_options = opts
@@ -496,7 +510,7 @@ class HAPublisher:
         """Move the selected processed clip back into the inbox so the normal
         watcher re-runs it end-to-end with the current config."""
         sel = self._reprocess_selected
-        if not sel or sel == "(none)":
+        if not sel or sel == SELECT_NONE:
             print("  [reprocess] no clip selected", flush=True)
             return
         name = os.path.basename(sel)  # guard against path traversal
@@ -524,6 +538,11 @@ class HAPublisher:
             print(f"  [reprocess] {name} -> inbox{note}; will re-run with "
                   f"current config", flush=True)
             self.publish_queues()  # reflect the move immediately
+            # Reset the dropdown to "(none)" so the UI doesn't keep showing the
+            # now-requeued (and no-longer-listed) file as the selection.
+            self._reprocess_selected = None
+            self.client.publish(f"{self.node}/reprocess_select", SELECT_NONE,
+                                retain=True)
         except Exception as exc:
             print(f"  [reprocess] failed to requeue '{name}': {exc}", flush=True)
 
