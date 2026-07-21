@@ -658,8 +658,13 @@ class HAPublisher:
             self._last_inbox_options = in_opts
 
     def _do_reprocess(self) -> None:
-        """Move the selected processed clip back into the inbox so the normal
-        watcher re-runs it end-to-end with the current config."""
+        """Copy the selected processed clip into the inbox so the watcher re-runs
+        it end-to-end with the current config.
+
+        The clip is COPIED (not moved), so the original stays safe in the
+        processed folder — deleting or cancelling the inbox copy can never lose
+        the clip. On completion the watcher discards the throwaway inbox copy
+        (the archived original is authoritative)."""
         sel = self._reprocess_selected
         if not sel or sel == SELECT_NONE:
             print("  [reprocess] no clip selected", flush=True)
@@ -674,7 +679,7 @@ class HAPublisher:
         try:
             os.makedirs(inbox, exist_ok=True)
             dst = os.path.join(inbox, name)
-            shutil.move(src, dst)
+            shutil.copy2(src, dst)
             # Capture the "annotate this run" intent NOW (at button press) via a
             # sidecar marker the watcher consumes, so toggling the switch after
             # pressing can't change an already-queued job.

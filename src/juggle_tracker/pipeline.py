@@ -607,7 +607,15 @@ def move_to_processed(cfg: Config, clip_path: str) -> str:
     dst_dir = cfg.capture.processed_dir
     os.makedirs(dst_dir, exist_ok=True)
     dst = os.path.join(dst_dir, os.path.basename(clip_path))
-    shutil.move(clip_path, dst)
+    if os.path.abspath(clip_path) != os.path.abspath(dst):
+        if os.path.exists(dst):
+            # A reprocess runs against a COPY placed in the inbox while the
+            # original stays in `processed`. The archived original is
+            # authoritative, so discard the inbox copy rather than clobber it
+            # (this also means deleting a queued reprocess never loses a clip).
+            os.remove(clip_path)
+        else:
+            shutil.move(clip_path, dst)
     # Enforce retention on the processed folder (0 = keep forever).
     _prune_old_clips(dst_dir, int(cfg.capture.get("processed_retention_days", 0) or 0))
     return dst
