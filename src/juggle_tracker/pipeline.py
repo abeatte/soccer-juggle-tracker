@@ -265,13 +265,20 @@ class Pipeline:
                 try:
                     # Transcode mp4v -> browser-playable H.264 for HA playback.
                     self._transcode_h264(raw, stage)
-                except Exception as exc:  # keep the (mp4v) overlay rather than lose it
+                except Exception as exc:
+                    # Do NOT publish the raw mp4v: browsers can't play it inline,
+                    # so the HA card would render a blank frame behind a valid-
+                    # looking URL. Hide the card instead (empty video_url) and
+                    # leave the previous replay file untouched.
                     print(f"  [reprocess] H.264 transcode failed ({exc}); "
-                          f"keeping raw overlay", flush=True)
-                    shutil.copyfile(raw, stage)
-                os.replace(stage, final)  # atomic overwrite of the single file
-                self.ha.publish_last_reprocessed(clip_path, ts)
-                print(f"  [reprocess] annotated replay -> {final}", flush=True)
+                          f"not publishing a non-playable replay", flush=True)
+                    if os.path.exists(stage):
+                        os.remove(stage)
+                    self.ha.publish_reprocess_pending(clip_path, annotated=False)
+                else:
+                    os.replace(stage, final)  # atomic overwrite of the single file
+                    self.ha.publish_last_reprocessed(clip_path, ts)
+                    print(f"  [reprocess] annotated replay -> {final}", flush=True)
             else:
                 print("  [reprocess] no overlay frames written (empty clip?)",
                       flush=True)
@@ -429,11 +436,16 @@ class Pipeline:
         Chrome won't play inline. The system ffmpeg (``libx264``) produces a
         widely-playable file; ``veryfast`` keeps CPU/heat down and the overlay
         clip is only 640px so it's quick. ``+faststart`` moves the moov atom to
-        the front for progressive web playback. Raises (``check=True``) on
-        failure so the caller falls back to the raw clip."""
+        the front for progressive web playback. The ``scale`` filter rounds the
+        frame down to even width/height — the ROI-cropped/downscaled overlay can
+        have an ODD dimension, which ``libx264 -pix_fmt yuv420p`` rejects (it
+        requires even dims); without this the transcode raises and the caller
+        keeps a non-playable mp4v. Raises (``check=True``) on real failure so the
+        caller can fall back."""
         subprocess.run(
             ["ffmpeg", "-y", "-loglevel", "error", "-i", src,
              "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
+             "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
              "-movflags", "+faststart", "-an", dst],
             check=True,
         )
