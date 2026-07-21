@@ -750,6 +750,23 @@ class HAPublisher:
         self.client.publish(f"{self.node}/inbox_select", SELECT_NONE,
                             retain=True)
 
+    @staticmethod
+    def _fmt_duration(seconds: float) -> str:
+        """Format seconds as m:ss (e.g. 20.4 -> '0:20')."""
+        s = int(round(seconds))
+        return f"{s // 60}:{s % 60:02d}"
+
+    def _probe_duration(self, path: str) -> Optional[float]:
+        """Clip duration in seconds via ffprobe, or None on failure."""
+        try:
+            out = subprocess.run(
+                ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                 "-of", "default=nw=1:nokey=1", path],
+                check=True, capture_output=True, text=True).stdout.strip()
+            return float(out) if out else None
+        except Exception:
+            return None
+
     def _update_reprocess_thumb(self) -> None:
         """Generate + publish a poster thumbnail for the currently selected
         reprocess clip, grabbed `self._thumb_seconds` into the clip. Publishes an
@@ -788,10 +805,17 @@ class HAPublisher:
             return
         ver = int(time.time())
         url = f"{self.media_base.rstrip('/')}/thumbs/{name}.jpg?v={ver}"
+        payload = {"name": name, "thumb_url": url}
+        dur = self._probe_duration(src)
+        dnote = ""
+        if dur is not None:
+            payload["duration"] = round(dur, 1)
+            dstr = self._fmt_duration(dur)
+            payload["duration_str"] = dstr
+            dnote = f" ({dstr})"
         self.client.publish(
-            f"{self.node}/reprocess_thumb",
-            json.dumps({"name": name, "thumb_url": url}), retain=True)
-        print(f"  [thumb] {name} @ {self._thumb_seconds:.1f}s -> {out}",
+            f"{self.node}/reprocess_thumb", json.dumps(payload), retain=True)
+        print(f"  [thumb] {name} @ {self._thumb_seconds:.1f}s{dnote} -> {out}",
               flush=True)
 
     def publish_reprocess_pending(self, clip_name: str,

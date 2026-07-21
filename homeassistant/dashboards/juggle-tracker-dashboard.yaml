@@ -497,9 +497,13 @@ views:
                 name: Reprocess selected clip
           - type: markdown
             content: >
-              {% set u =
-              state_attr('sensor.front_yard_soccer_juggle_tracker_juggle_reprocess_thumbnail','thumb_url')
-              %} {% if u %}<img src="{{ u }}" width="100%">{% endif %}
+              {% set k =
+              states['sensor.front_yard_soccer_juggle_tracker_juggle_reprocess_thumbnail']
+              %} {% if k %}{% set u = k.attributes.get('thumb_url') %}{% set d =
+              k.attributes.get('duration_str') %}{% if u %}**{{ k.state }}**{% if
+              d %} · ⏱️ {{ d }}{% endif %}
+
+              <img src="{{ u }}" width="100%">{% endif %}{% endif %}
             title: 🖼️ Selected Clip Preview
             visibility:
               - condition: state
