@@ -182,6 +182,34 @@ class Database:
         )
         self.conn.commit()
 
+    def abort_session(self, session_id: int) -> None:
+        """Discard a session and everything it recorded.
+
+        Used when a clip's processing is cancelled mid-run: streaks that already
+        completed were committed by :meth:`record_attempt` (and may have bumped
+        a person's denormalized ``high_score``), so simply stopping would leave
+        phantom scores from an unwanted clip. This deletes the session (its
+        attempts cascade away via the FK) and then recomputes the high score of
+        every person the session touched from their *remaining* attempts."""
+        rows = self.conn.execute(
+            "SELECT DISTINCT person_id FROM attempts "
+            "WHERE session_id = ? AND person_id IS NOT NULL",
+            (session_id,),
+        ).fetchall()
+        pids = [int(r["person_id"]) for r in rows]
+        # ON DELETE CASCADE (PRAGMA foreign_keys=ON) removes the attempts too.
+        self.conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+        for pid in pids:
+            row = self.conn.execute(
+                "SELECT MAX(count) AS hi FROM attempts WHERE person_id = ?",
+                (pid,),
+            ).fetchone()
+            hi = int(row["hi"]) if row and row["hi"] is not None else 0
+            self.conn.execute(
+                "UPDATE people SET high_score = ? WHERE id = ?", (hi, pid)
+            )
+        self.conn.commit()
+
     def process_time_stats(self) -> tuple[float, float, int]:
         """Return (last_seconds, avg_seconds, count) over timed sessions."""
         last_row = self.conn.execute(

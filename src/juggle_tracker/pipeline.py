@@ -73,6 +73,13 @@ def _match_pose_to_track(poses, persons):
     return out
 
 
+class ClipCancelled(Exception):
+    """Raised inside the processing loop when an HA "delete" targets the clip
+    that is currently being processed. ``process()`` catches it to roll back the
+    session's partial DB/HA writes, then re-raises so the watcher removes the
+    clip instead of archiving it to the processed dir."""
+
+
 class Pipeline:
     def __init__(self, cfg: Config):
         self.cfg = cfg
@@ -105,8 +112,14 @@ class Pipeline:
                 vote_min_frames=int(cfg.identity.get("vote_min_frames", 3)),
             )
         self.ha = HAPublisher(cfg)
+        # Let the publisher signal cancellation back into a running clip when HA
+        # "delete" targets the in-flight file.
+        self.ha.bind_worker(self)
         # Live status published to HA (idle / processing / cooldown + progress).
         self._cur_clip: Optional[str] = None
+        # Basename of a clip the operator asked to cancel; the frame loop checks
+        # it and raises ClipCancelled when it matches the clip in flight.
+        self._cancel_clip: Optional[str] = None
         self._cur_total: int = 0
         self._cur_frame: int = 0
         self._cur_pct: Optional[float] = None
@@ -129,6 +142,19 @@ class Pipeline:
         )
 
     # ------------------------------------------------------------------
+    def request_cancel(self, name: str) -> bool:
+        """Ask the worker to cancel the clip currently being processed.
+
+        Returns True if ``name`` matches the in-flight clip's basename (the
+        frame loop will raise ClipCancelled shortly and the watcher will delete
+        the file), or False if nothing matching is in flight — in which case the
+        caller should handle it as a plain queued-file delete."""
+        cur = self._cur_clip
+        if cur and os.path.basename(cur) == name:
+            self._cancel_clip = name
+            return True
+        return False
+
     def process(self, clip_path: str, debug_video: Optional[str] = None) -> ClipResult:
         src = FrameSource(
             clip_path,
@@ -151,6 +177,7 @@ class Pipeline:
         # Publish "processing" + reset progress (total frames from the clip header).
         total = src.frame_count if getattr(src, "frame_count", 0) > 0 else 0
         self._cur_clip = clip_path
+        self._cancel_clip = None  # clear any stale request from a prior clip
         self._cur_total = total
         self._cur_frame = 0
         self._cur_pct = 0.0
@@ -158,6 +185,21 @@ class Pipeline:
                                frame=0, total=total)
 
         for frame in src:
+            # Operator asked (via HA) to cancel THIS clip: tear down cleanly,
+            # roll back everything the partial run wrote, then bail so the
+            # watcher deletes the file instead of archiving it.
+            if self._cancel_clip is not None:
+                src.release()
+                if writer is not None:
+                    writer.release()
+                self.db.abort_session(session_id)
+                self.ha.sync_all(self.db.list_people())
+                self.ha.publish_status("idle", progress=0)
+                print(f"  [cancel] aborted {os.path.basename(clip_path)} "
+                      f"({n_frames} frames in)", flush=True)
+                self._cur_clip = None
+                self._cancel_clip = None
+                raise ClipCancelled(clip_path)
             n_frames += 1
             img = frame.image
             h, w = img.shape[:2]
@@ -257,7 +299,13 @@ class Pipeline:
         ts = time.time()
         raw = os.path.join(hs_dir, f".reproc_{int(ts)}.mp4")
         # process() draws the overlay into `raw` (OpenCV mp4v) as it runs.
-        res = self.process(clip_path, debug_video=raw)
+        try:
+            res = self.process(clip_path, debug_video=raw)
+        except BaseException:
+            # Cancelled or errored mid-run: don't leave a partial overlay temp.
+            if os.path.exists(raw):
+                os.remove(raw)
+            raise
         final = os.path.join(hs_dir, "last_reprocessed.mp4")
         try:
             if os.path.exists(raw) and os.path.getsize(raw) > 0:

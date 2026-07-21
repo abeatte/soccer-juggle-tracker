@@ -90,7 +90,7 @@ def _enroll(args) -> int:
 
 
 def _process(args) -> int:
-    from .pipeline import Pipeline, move_to_processed
+    from .pipeline import Pipeline, move_to_processed, ClipCancelled
 
     cfg = load_config(args.config)
     pipe = Pipeline(cfg)
@@ -114,7 +114,7 @@ def _process(args) -> int:
 
 
 def _watch(args) -> int:
-    from .pipeline import Pipeline, move_to_processed
+    from .pipeline import Pipeline, move_to_processed, ClipCancelled
 
     cfg = load_config(args.config)
     inbox = cfg.capture.inbox_dir
@@ -153,6 +153,17 @@ def _watch(args) -> int:
                             os.remove(marker)
                         except OSError:
                             pass
+                except ClipCancelled:
+                    # Operator deleted the in-flight clip via HA: remove it and
+                    # its marker instead of archiving. process() already rolled
+                    # back the session's partial DB/HA writes.
+                    for p in (clip, marker):
+                        try:
+                            os.remove(p)
+                        except OSError:
+                            pass
+                    print(f"-> cancelled + removed {os.path.basename(clip)}",
+                          flush=True)
                 except Exception as exc:  # keep the worker alive
                     print(f"   ERROR processing {clip}: {exc}", file=sys.stderr)
             # Refresh the inbox/processed queue sensors in HA each cycle.

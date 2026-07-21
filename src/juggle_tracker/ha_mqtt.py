@@ -110,9 +110,20 @@ class HAPublisher:
         )
         self._reprocess_selected: Optional[str] = None
         self._last_select_options: Optional[list] = None
+        # Delete-a-clip-from-the-inbox control. Deleting the clip that is
+        # currently being processed also cancels the in-flight run.
+        self.inbox_select_topic = f"{self.node}/inbox_select/set"
+        self.delete_topic = f"{self.node}/delete/set"
+        self._inbox_selected: Optional[str] = None
+        self._last_inbox_options: Optional[list] = None
+        # Back-reference to the Pipeline (set via bind_worker); used to cancel
+        # the in-flight clip when the operator deletes the file being processed.
+        self._worker = None
         self.client.subscribe(self.reprocess_topic)
         self.client.subscribe(self.reprocess_select_topic)
         self.client.subscribe(self.reprocess_annotate_topic)
+        self.client.subscribe(self.inbox_select_topic)
+        self.client.subscribe(self.delete_topic)
         self.announce_queues()
         self.publish_queues()
 
@@ -124,6 +135,11 @@ class HAPublisher:
             "model": "RLC-810A CV pipeline",
             "manufacturer": "DIY",
         }
+
+    def bind_worker(self, worker) -> None:
+        """Attach the Pipeline so inbound commands can reach into a running clip
+        (used by the inbox-delete handler to cancel the in-flight file)."""
+        self._worker = worker
 
     def announce_person(self, name: str) -> None:
         """Publish MQTT discovery config for a person's high-score sensor."""
@@ -207,6 +223,14 @@ class HAPublisher:
                 self.client.publish(
                     f"{self.node}/reprocess_annotate",
                     "ON" if self._reprocess_annotate else "OFF", retain=True)
+            elif topic == self.inbox_select_topic:
+                self._inbox_selected = (
+                    None if (not payload or payload == SELECT_NONE) else payload
+                )
+                self.client.publish(f"{self.node}/inbox_select",
+                                    payload or SELECT_NONE, retain=True)
+            elif topic == self.delete_topic:
+                self._do_delete_inbox()
             elif not self.calib_enabled:
                 return
             elif topic == self.apply_topic:
@@ -500,6 +524,24 @@ class HAPublisher:
         # Start the reprocess dropdown with a clean (nothing-selected) state.
         self.client.publish(f"{self.node}/reprocess_select", SELECT_NONE,
                             retain=True)
+        # Delete-selected-inbox-clip button (destructive — the HA card should
+        # attach a tap confirmation). If the selected clip is the one currently
+        # being processed, this also cancels the in-flight run.
+        self.client.publish(
+            f"{self.prefix}/button/{self.node}/delete_inbox/config",
+            json.dumps({
+                "name": "Delete Selected Inbox Clip",
+                "unique_id": f"{self.node}_delete_inbox",
+                "command_topic": self.delete_topic,
+                "payload_press": "delete",
+                "icon": "mdi:trash-can",
+                "entity_category": "config",
+                "availability_topic": self.avail_topic,
+                "device": dev,
+            }), retain=True)
+        # Start the inbox dropdown with a clean (nothing-selected) state.
+        self.client.publish(f"{self.node}/inbox_select", SELECT_NONE,
+                            retain=True)
 
     def _announce_reprocess_select(self, options: list) -> None:
         """(Re)publish the reprocess `select` discovery with current options."""
@@ -512,6 +554,22 @@ class HAPublisher:
                 "command_topic": self.reprocess_select_topic,
                 "options": options,
                 "icon": "mdi:file-refresh",
+                "entity_category": "config",
+                "availability_topic": self.avail_topic,
+                "device": self._device(),
+            }), retain=True)
+
+    def _announce_inbox_select(self, options: list) -> None:
+        """(Re)publish the inbox-delete `select` discovery with current options."""
+        self.client.publish(
+            f"{self.prefix}/select/{self.node}/inbox_file/config",
+            json.dumps({
+                "name": "Juggle Inbox File",
+                "unique_id": f"{self.node}_inbox_file",
+                "state_topic": f"{self.node}/inbox_select",
+                "command_topic": self.inbox_select_topic,
+                "options": options,
+                "icon": "mdi:file-remove",
                 "entity_category": "config",
                 "availability_topic": self.avail_topic,
                 "device": self._device(),
@@ -541,6 +599,11 @@ class HAPublisher:
         if opts != self._last_select_options:
             self._announce_reprocess_select(opts)
             self._last_select_options = opts
+        # Keep the inbox-delete dropdown in sync with the live inbox contents.
+        in_opts = [SELECT_NONE] + infiles[:50]
+        if in_opts != self._last_inbox_options:
+            self._announce_inbox_select(in_opts)
+            self._last_inbox_options = in_opts
 
     def _do_reprocess(self) -> None:
         """Move the selected processed clip back into the inbox so the normal
@@ -587,6 +650,52 @@ class HAPublisher:
                                 retain=True)
         except Exception as exc:
             print(f"  [reprocess] failed to requeue '{name}': {exc}", flush=True)
+
+    def _do_delete_inbox(self) -> None:
+        """Delete the selected inbox clip.
+
+        If it is the clip currently being processed, ask the worker to cancel
+        the in-flight run — the watcher then removes the file (and its marker)
+        once the loop aborts. Otherwise the queued clip and its `.annotate`
+        sidecar are removed here immediately."""
+        sel = self._inbox_selected
+        if not sel or sel == SELECT_NONE:
+            print("  [delete] no inbox clip selected", flush=True)
+            return
+        name = os.path.basename(sel)  # guard against path traversal
+        inbox = self.cfg.capture.get("inbox_dir")
+
+        cancelled = False
+        if self._worker is not None:
+            try:
+                cancelled = bool(self._worker.request_cancel(name))
+            except Exception as exc:
+                print(f"  [delete] cancel request failed: {exc}", flush=True)
+
+        if cancelled:
+            # In flight: the frame loop is still reading the file, so let the
+            # watcher delete it (+ marker + partial temp) after it aborts.
+            print(f"  [delete] {name} is processing -> requested cancel",
+                  flush=True)
+        else:
+            removed = False
+            for p in (os.path.join(inbox, name),
+                      os.path.join(inbox, name + ".annotate")):
+                try:
+                    os.remove(p)
+                    if not p.endswith(".annotate"):
+                        removed = True
+                except FileNotFoundError:
+                    pass
+                except OSError as exc:
+                    print(f"  [delete] failed to remove {p}: {exc}", flush=True)
+            print(f"  [delete] {'removed queued clip' if removed else 'clip not found'}"
+                  f": {name}", flush=True)
+
+        self.publish_queues()  # reflect the removal immediately
+        self._inbox_selected = None
+        self.client.publish(f"{self.node}/inbox_select", SELECT_NONE,
+                            retain=True)
 
     def publish_reprocess_pending(self, clip_name: str,
                                   annotated: bool) -> None:
