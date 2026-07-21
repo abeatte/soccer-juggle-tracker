@@ -410,14 +410,22 @@ visibility:
   - condition: state
     entity: sensor.juggle_last_reprocessed
     state_not: unavailable
+  - condition: state
+    entity: sensor.juggle_last_reprocessed
+    attribute: video_url
+    state_not: ""
 ```
 
-> Unlike the per-kid high-score sensors, `last_reprocessed` isn't seeded on
-> startup, so its `video_url` attribute is absent until the first reprocess.
-> That's why visibility here keys on the **state** (`unknown`/`unavailable`)
-> rather than the `video_url` attribute — an absent attribute is `!= ""` and
-> would make the card show prematurely. The two single-string `state_not`
-> conditions are ANDed (a YAML list under one `state_not` is rejected by HA).
+> `last_reprocessed` isn't seeded on startup, so before the **first** reprocess
+> the sensor is `unknown` and its `video_url` attribute is absent — the two
+> `state_not` guards hide the card until then. Once a reprocess has run the
+> worker keeps `video_url` **always present**: it publishes `""` the moment a
+> clip is queued (so the card hides while an annotated run is in flight, and
+> stays hidden for an annotate-off run that produces no replay) and the real
+> URL when an annotated run finishes. That's why the third condition —
+> `attribute: video_url, state_not: ""` — is the one that actually shows the
+> card only when a fresh replay exists. All three are ANDed (each `state_not`
+> is a single string; a YAML list under one `state_not` is rejected by HA).
 
 List the actual inbox filenames with a Markdown card reading the attribute:
 

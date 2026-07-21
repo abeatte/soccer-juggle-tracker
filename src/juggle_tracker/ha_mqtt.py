@@ -574,6 +574,12 @@ class HAPublisher:
             print(f"  [reprocess] {name} -> inbox{note}; will re-run with "
                   f"current config", flush=True)
             self.publish_queues()  # reflect the move immediately
+            # Clear the last-reprocessed replay for this new run so a card
+            # guarded on `video_url != ""` hides while the run is in flight
+            # (annotated) or stays hidden for a non-annotated run (which
+            # produces no replay). publish_last_reprocessed() restores a real
+            # URL when an annotated run finishes.
+            self.publish_reprocess_pending(name, self._reprocess_annotate)
             # Reset the dropdown to "(none)" so the UI doesn't keep showing the
             # now-requeued (and no-longer-listed) file as the selection.
             self._reprocess_selected = None
@@ -581,6 +587,27 @@ class HAPublisher:
                                 retain=True)
         except Exception as exc:
             print(f"  [reprocess] failed to requeue '{name}': {exc}", flush=True)
+
+    def publish_reprocess_pending(self, clip_name: str,
+                                  annotated: bool) -> None:
+        """Announce that a reprocess was just queued, clearing the replay URL.
+
+        Published with an empty ``video_url`` (retained) so an HA card guarded on
+        ``video_url != ""`` hides while an annotated run is in flight, and stays
+        hidden for a non-annotated run (which produces no replay — so the last
+        reprocess no longer misrepresents itself with a stale clip).
+        :meth:`publish_last_reprocessed` restores a real URL when an annotated
+        run completes. Keeping ``video_url`` always present (``""`` or a URL)
+        after the first reprocess is what makes the attribute-based visibility
+        guard reliable."""
+        if not self.enabled:
+            return
+        self.client.publish(
+            f"{self.node}/last_reprocessed",
+            json.dumps({"name": os.path.basename(clip_name), "video_url": "",
+                        "annotated": annotated, "processing": annotated,
+                        "ts": int(time.time())}),
+            retain=True)
 
     def publish_last_reprocessed(self, clip_name: str,
                                  ts: Optional[float] = None,
