@@ -311,12 +311,24 @@ reprocess control:
 | `sensor.juggle_processed_count` | Count of already-processed clips (state) + `files` attribute (newest first, capped at 100) |
 | `select.juggle_reprocess_file` | Dropdown of processed filenames (refreshed each cycle) |
 | `button.reprocess_selected_clip` | Re-runs the selected clip |
+| `switch.juggle_annotate_on_reprocess` | When ON, the next reprocess also writes a viewable annotated replay |
+| `sensor.juggle_last_reprocessed` | Name of the last annotated reprocess (state) + `video_url` attribute |
 
 **Reprocess** moves the chosen processed clip back into the inbox, so the normal
 watcher re-runs it **end-to-end with the current (possibly just-calibrated)
 config** — taking every action a fresh run does (updating high scores, writing
 the replay video, publishing to HA). Pick a file in the select, then press the
 button.
+
+**Annotate On Reprocess** (checkbox): flip this ON *before* pressing Reprocess to
+also get a full annotated replay of that clip — ball/pose/streak overlay, ROI
+border, ground line — regardless of whether it beats a record. The overlay is
+drawn in the same detection pass (no second inference run — just one extra
+ffmpeg transcode), so it's cheap enough for this box. The result overwrites a
+single file, `last_reprocessed.mp4`, and its URL lands on
+`sensor.juggle_last_reprocessed`. The toggle is captured at button-press time,
+so changing it afterwards won't affect an already-queued clip, and it resets to
+`capture.reprocess_annotate_default` on restart.
 
 Dashboard example (verify device-prefixed IDs in Developer Tools → States):
 
@@ -328,8 +340,28 @@ entities:
   - entity: sensor.juggle_processed_count
   - type: divider
   - entity: select.juggle_reprocess_file
+  - entity: switch.juggle_annotate_on_reprocess
   - entity: button.reprocess_selected_clip
 ```
+
+Show the annotated replay in its own window. The iframe is hidden until a
+reprocess has produced one (visibility keyed on the `video_url` attribute):
+
+```yaml
+type: iframe
+url: /local/juggle/last_reprocessed.mp4
+aspect_ratio: 56%
+title: 🎬 Last Annotated Reprocess
+visibility:
+  - condition: state
+    entity: sensor.juggle_last_reprocessed
+    attribute: video_url
+    state_not: ""
+```
+
+> The `?v=` cache-buster on `video_url` changes every reprocess; the iframe's
+> hard-coded `url` keeps the same filename, so hard-refresh (Ctrl-Shift-R) if a
+> newly overwritten replay doesn't update.
 
 List the actual inbox filenames with a Markdown card reading the attribute:
 

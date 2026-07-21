@@ -92,10 +92,20 @@ class HAPublisher:
         # Inbox/processed queue sensors + reprocess-a-clip control.
         self.reprocess_topic = f"{self.node}/reprocess/set"
         self.reprocess_select_topic = f"{self.node}/reprocess_select/set"
+        # "Annotate on reprocess" switch: when ON, a reprocess also writes a
+        # browser-playable annotated replay (overlay drawn in the same detection
+        # pass — no extra inference). The live value is remembered here and
+        # captured per-clip at button-press time; it resets to the config
+        # default on restart (like the calibration numbers).
+        self.reprocess_annotate_topic = f"{self.node}/reprocess_annotate/set"
+        self._reprocess_annotate = bool(
+            self.cfg.capture.get("reprocess_annotate_default", False)
+        )
         self._reprocess_selected: Optional[str] = None
         self._last_select_options: Optional[list] = None
         self.client.subscribe(self.reprocess_topic)
         self.client.subscribe(self.reprocess_select_topic)
+        self.client.subscribe(self.reprocess_annotate_topic)
         self.announce_queues()
         self.publish_queues()
 
@@ -183,6 +193,11 @@ class HAPublisher:
                 self._reprocess_selected = payload or None
                 self.client.publish(f"{self.node}/reprocess_select", payload,
                                     retain=True)
+            elif topic == self.reprocess_annotate_topic:
+                self._reprocess_annotate = payload.upper() in ("ON", "1", "TRUE")
+                self.client.publish(
+                    f"{self.node}/reprocess_annotate",
+                    "ON" if self._reprocess_annotate else "OFF", retain=True)
             elif not self.calib_enabled:
                 return
             elif topic == self.apply_topic:
@@ -402,6 +417,41 @@ class HAPublisher:
                 "availability_topic": self.avail_topic,
                 "device": dev,
             }), retain=True)
+        # "Annotate on reprocess" toggle (renders as a checkbox/switch in HA).
+        self.client.publish(
+            f"{self.prefix}/switch/{self.node}/reprocess_annotate/config",
+            json.dumps({
+                "name": "Annotate On Reprocess",
+                "unique_id": f"{self.node}_reprocess_annotate",
+                "state_topic": f"{self.node}/reprocess_annotate",
+                "command_topic": self.reprocess_annotate_topic,
+                "payload_on": "ON", "payload_off": "OFF",
+                "icon": "mdi:draw",
+                "entity_category": "config",
+                "availability_topic": self.avail_topic,
+                "device": dev,
+            }), retain=True)
+        # Seed the toggle state so HA reflects the worker's current (default)
+        # value after a restart.
+        self.client.publish(
+            f"{self.node}/reprocess_annotate",
+            "ON" if self._reprocess_annotate else "OFF", retain=True)
+        # Sensor exposing the most recent forced-annotated reprocess replay
+        # (name in state, video_url in attributes). We deliberately do NOT seed
+        # an empty value here, so a prior replay URL (retained on the broker)
+        # survives a worker restart.
+        self.client.publish(
+            f"{self.prefix}/sensor/{self.node}/last_reprocessed/config",
+            json.dumps({
+                "name": "Juggle Last Reprocessed",
+                "unique_id": f"{self.node}_last_reprocessed",
+                "state_topic": f"{self.node}/last_reprocessed",
+                "value_template": "{{ value_json.name | default('none') }}",
+                "json_attributes_topic": f"{self.node}/last_reprocessed",
+                "icon": "mdi:movie-open-play",
+                "availability_topic": self.avail_topic,
+                "device": dev,
+            }), retain=True)
 
     def _announce_reprocess_select(self, options: list) -> None:
         """(Re)publish the reprocess `select` discovery with current options."""
@@ -458,12 +508,42 @@ class HAPublisher:
             return
         try:
             os.makedirs(inbox, exist_ok=True)
-            shutil.move(src, os.path.join(inbox, name))
-            print(f"  [reprocess] {name} -> inbox; will re-run with current config",
-                  flush=True)
+            dst = os.path.join(inbox, name)
+            shutil.move(src, dst)
+            # Capture the "annotate this run" intent NOW (at button press) via a
+            # sidecar marker the watcher consumes, so toggling the switch after
+            # pressing can't change an already-queued job.
+            note = ""
+            if self._reprocess_annotate:
+                try:
+                    with open(dst + ".annotate", "w", encoding="utf-8") as fh:
+                        fh.write("1")
+                    note = " (annotated replay)"
+                except OSError as exc:
+                    note = f" (annotate marker failed: {exc})"
+            print(f"  [reprocess] {name} -> inbox{note}; will re-run with "
+                  f"current config", flush=True)
             self.publish_queues()  # reflect the move immediately
         except Exception as exc:
             print(f"  [reprocess] failed to requeue '{name}': {exc}", flush=True)
+
+    def publish_last_reprocessed(self, clip_name: str,
+                                 ts: Optional[float] = None,
+                                 annotated: bool = True) -> None:
+        """Publish the URL of the most recent forced-annotated reprocess replay.
+
+        One overwritten file (<highscore_dir>/last_reprocessed.mp4) served by HA
+        at /local/juggle/last_reprocessed.mp4. The ``?v=`` cache-buster forces
+        the browser to reload the overwritten file each time."""
+        if not self.enabled:
+            return
+        ver = int(ts or time.time())
+        url = f"{self.media_base.rstrip('/')}/last_reprocessed.mp4?v={ver}"
+        self.client.publish(
+            f"{self.node}/last_reprocessed",
+            json.dumps({"name": os.path.basename(clip_name), "video_url": url,
+                        "annotated": annotated, "ts": ver}),
+            retain=True)
 
     # ------------------------------------------------------------------
     def publish_session(self, results: list[dict]) -> None:

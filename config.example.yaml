@@ -37,6 +37,13 @@ capture:
   #         for record-setting clips, so the extra CPU/heat is paid rarely.
   # false = just copy the raw clip (zero extra processing).
   annotate_highscore: true
+  # Default state of the "Annotate On Reprocess" switch in Home Assistant. When
+  # that switch is ON and you press "Reprocess Selected Clip", the re-run also
+  # writes a browser-playable annotated replay to <highscore_dir>/
+  # last_reprocessed.mp4 (overlay drawn in the SAME detection pass — no extra
+  # inference, just one transcode). The live toggle is remembered by the worker
+  # and resets to this default on restart.
+  reprocess_annotate_default: false
 
 # Region of interest in the frame, as fractions [0-1]: x0,y0,x1,y1.
 # Crop to just the play area to cut CPU cost and false detections.

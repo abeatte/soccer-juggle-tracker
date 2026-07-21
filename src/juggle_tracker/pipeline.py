@@ -241,7 +241,44 @@ class Pipeline:
         return ClipResult(clip_path, n_frames, streaks, new_highs)
 
     # ------------------------------------------------------------------
-    def _record(self, session_id, track_id, event, streaks, new_highs):
+    def process_annotated_viewable(self, clip_path: str) -> ClipResult:
+        """Process a clip AND always produce a browser-playable annotated replay
+        of the whole clip, regardless of whether it set a record.
+
+        The overlay is drawn during the normal detection pass (via the
+        ``debug_video`` output of :meth:`process`), so this costs only ONE extra
+        ffmpeg transcode over a plain run — NOT a second inference pass. Used by
+        the watcher when a reprocess was requested with the "Annotate On
+        Reprocess" switch on. The result is written to a single overwritten file
+        (<highscore_dir>/last_reprocessed.mp4) and its URL is published to HA
+        (sensor.juggle_last_reprocessed)."""
+        hs_dir = self.cfg.capture.get("highscore_dir", "highscores")
+        os.makedirs(hs_dir, exist_ok=True)
+        ts = time.time()
+        raw = os.path.join(hs_dir, f".reproc_{int(ts)}.mp4")
+        # process() draws the overlay into `raw` (OpenCV mp4v) as it runs.
+        res = self.process(clip_path, debug_video=raw)
+        final = os.path.join(hs_dir, "last_reprocessed.mp4")
+        try:
+            if os.path.exists(raw) and os.path.getsize(raw) > 0:
+                stage = final + ".part"
+                try:
+                    # Transcode mp4v -> browser-playable H.264 for HA playback.
+                    self._transcode_h264(raw, stage)
+                except Exception as exc:  # keep the (mp4v) overlay rather than lose it
+                    print(f"  [reprocess] H.264 transcode failed ({exc}); "
+                          f"keeping raw overlay", flush=True)
+                    shutil.copyfile(raw, stage)
+                os.replace(stage, final)  # atomic overwrite of the single file
+                self.ha.publish_last_reprocessed(clip_path, ts)
+                print(f"  [reprocess] annotated replay -> {final}", flush=True)
+            else:
+                print("  [reprocess] no overlay frames written (empty clip?)",
+                      flush=True)
+        finally:
+            if os.path.exists(raw):
+                os.remove(raw)
+        return res
         pid = self.resolver.resolve(track_id) if self.resolver else None
         if pid is None:
             # Couldn't attribute to an enrolled kid -> the catch-all profile,

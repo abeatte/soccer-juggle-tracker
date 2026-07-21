@@ -131,12 +131,28 @@ def _watch(args) -> int:
                 # Wait until the file stops growing (finished recording).
                 if not _is_stable(clip):
                     continue
-                print(f"\n-> {os.path.basename(clip)}")
+                # A sidecar '<clip>.annotate' marker (dropped by an HA reprocess
+                # with the "Annotate On Reprocess" switch on) forces a viewable
+                # annotated replay for this clip.
+                marker = clip + ".annotate"
+                annotate = os.path.exists(marker)
+                print(f"\n-> {os.path.basename(clip)}"
+                      f"{'  [annotated replay]' if annotate else ''}")
                 try:
-                    res = pipe.process(clip)
+                    if annotate:
+                        res = pipe.process_annotated_viewable(clip)
+                    else:
+                        res = pipe.process(clip)
                     for s in res.streaks:
                         print(f"   {s['person']}: {s['count']} ({s['reason']})")
                     move_to_processed(cfg, clip)
+                    # Drop the marker only after the clip is handled + moved, so
+                    # a mid-run crash re-annotates on the retry.
+                    if annotate:
+                        try:
+                            os.remove(marker)
+                        except OSError:
+                            pass
                 except Exception as exc:  # keep the worker alive
                     print(f"   ERROR processing {clip}: {exc}", file=sys.stderr)
             # Refresh the inbox/processed queue sensors in HA each cycle.
