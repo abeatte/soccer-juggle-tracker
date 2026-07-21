@@ -486,12 +486,27 @@ views:
               - type: divider
               - entity: select.front_yard_soccer_juggle_tracker_juggle_reprocess_file
                 name: Reprocess file
+              - entity: >-
+                  number.front_yard_soccer_juggle_tracker_reprocess_thumbnail_second
+                name: Thumbnail second
               - entity: switch.front_yard_soccer_juggle_tracker_annotate_on_reprocess
                 name:
                   type: entity
               - entity: >-
                   button.front_yard_soccer_juggle_tracker_reprocess_selected_clip
                 name: Reprocess selected clip
+          - type: markdown
+            content: >
+              {% set u =
+              state_attr('sensor.front_yard_soccer_juggle_tracker_juggle_reprocess_thumbnail','thumb_url')
+              %} {% if u %}<img src="{{ u }}" width="100%">{% endif %}
+            title: 🖼️ Selected Clip Preview
+            visibility:
+              - condition: state
+                attribute: thumb_url
+                entity: >-
+                  sensor.front_yard_soccer_juggle_tracker_juggle_reprocess_thumbnail
+                state_not: ""
         visibility:
           - condition: user
             users:

@@ -45,6 +45,11 @@ capture:
   # and resets to this default on restart.
   reprocess_annotate_default: false
 
+  # Seconds into a clip to grab the preview thumbnail shown under the reprocess
+  # dropdown in HA (helps you pick the right clip). Live-editable from HA (no
+  # restart). 0 = first frame.
+  reprocess_thumbnail_seconds: 2.0
+
 # Region of interest in the frame, as fractions [0-1]: x0,y0,x1,y1.
 # Crop to just the play area to cut CPU cost and false detections.
 # On this slow CPU a tight ROI is one of the biggest speed wins.

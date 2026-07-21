@@ -119,11 +119,17 @@ class HAPublisher:
         # Back-reference to the Pipeline (set via bind_worker); used to cancel
         # the in-flight clip when the operator deletes the file being processed.
         self._worker = None
+        # Preview thumbnail for the selected reprocess clip (grabbed on select).
+        # Live-editable grab time (no restart), seeded from config.
+        self.thumb_seconds_topic = f"{self.node}/thumb_seconds/set"
+        self._thumb_seconds = float(
+            self.cfg.capture.get("reprocess_thumbnail_seconds", 2.0))
         self.client.subscribe(self.reprocess_topic)
         self.client.subscribe(self.reprocess_select_topic)
         self.client.subscribe(self.reprocess_annotate_topic)
         self.client.subscribe(self.inbox_select_topic)
         self.client.subscribe(self.delete_topic)
+        self.client.subscribe(self.thumb_seconds_topic)
         self.announce_queues()
         self.publish_queues()
 
@@ -218,6 +224,8 @@ class HAPublisher:
                 )
                 self.client.publish(f"{self.node}/reprocess_select",
                                     payload or SELECT_NONE, retain=True)
+                # Refresh the preview thumbnail for the newly selected clip.
+                self._update_reprocess_thumb()
             elif topic == self.reprocess_annotate_topic:
                 self._reprocess_annotate = payload.upper() in ("ON", "1", "TRUE")
                 self.client.publish(
@@ -231,6 +239,15 @@ class HAPublisher:
                                     payload or SELECT_NONE, retain=True)
             elif topic == self.delete_topic:
                 self._do_delete_inbox()
+            elif topic == self.thumb_seconds_topic:
+                try:
+                    self._thumb_seconds = max(0.0, min(60.0, float(payload)))
+                except (TypeError, ValueError):
+                    pass
+                self.client.publish(f"{self.node}/thumb_seconds",
+                                    self._thumb_seconds, retain=True)
+                # Regenerate the current preview at the new grab time.
+                self._update_reprocess_thumb()
             elif not self.calib_enabled:
                 return
             elif topic == self.apply_topic:
@@ -542,6 +559,41 @@ class HAPublisher:
         # Start the inbox dropdown with a clean (nothing-selected) state.
         self.client.publish(f"{self.node}/inbox_select", SELECT_NONE,
                             retain=True)
+        # Live grab-time (seconds) for the reprocess preview thumbnail. Applies
+        # immediately (no restart) — kept out of the calibration/Apply flow.
+        self.client.publish(
+            f"{self.prefix}/number/{self.node}/thumb_seconds/config",
+            json.dumps({
+                "name": "Reprocess Thumbnail Second",
+                "unique_id": f"{self.node}_thumb_seconds",
+                "state_topic": f"{self.node}/thumb_seconds",
+                "command_topic": self.thumb_seconds_topic,
+                "min": 0, "max": 60, "step": 0.5, "mode": "box",
+                "unit_of_measurement": "s",
+                "icon": "mdi:image-search",
+                "entity_category": "config",
+                "availability_topic": self.avail_topic,
+                "device": dev,
+            }), retain=True)
+        self.client.publish(f"{self.node}/thumb_seconds", self._thumb_seconds,
+                            retain=True)
+        # Preview-thumbnail sensor for the selected reprocess clip (name in
+        # state, JPG url in the `thumb_url` attribute; "" when none/failed).
+        self.client.publish(
+            f"{self.prefix}/sensor/{self.node}/reprocess_thumb/config",
+            json.dumps({
+                "name": "Juggle Reprocess Thumbnail",
+                "unique_id": f"{self.node}_reprocess_thumb",
+                "state_topic": f"{self.node}/reprocess_thumb",
+                "value_template": "{{ value_json.name | default('none') }}",
+                "json_attributes_topic": f"{self.node}/reprocess_thumb",
+                "icon": "mdi:image",
+                "availability_topic": self.avail_topic,
+                "device": dev,
+            }), retain=True)
+        self.client.publish(
+            f"{self.node}/reprocess_thumb",
+            json.dumps({"name": "none", "thumb_url": ""}), retain=True)
 
     def _announce_reprocess_select(self, options: list) -> None:
         """(Re)publish the reprocess `select` discovery with current options."""
@@ -648,6 +700,7 @@ class HAPublisher:
             self._reprocess_selected = None
             self.client.publish(f"{self.node}/reprocess_select", SELECT_NONE,
                                 retain=True)
+            self._update_reprocess_thumb()  # clear the stale preview thumbnail
         except Exception as exc:
             print(f"  [reprocess] failed to requeue '{name}': {exc}", flush=True)
 
@@ -696,6 +749,50 @@ class HAPublisher:
         self._inbox_selected = None
         self.client.publish(f"{self.node}/inbox_select", SELECT_NONE,
                             retain=True)
+
+    def _update_reprocess_thumb(self) -> None:
+        """Generate + publish a poster thumbnail for the currently selected
+        reprocess clip, grabbed `self._thumb_seconds` into the clip. Publishes an
+        empty ``thumb_url`` when nothing is selected or the grab fails, so the HA
+        preview card hides. Cheap single-frame ffmpeg extract, on demand."""
+        if not self.enabled:
+            return
+        def _clear() -> None:
+            self.client.publish(
+                f"{self.node}/reprocess_thumb",
+                json.dumps({"name": "none", "thumb_url": ""}), retain=True)
+        sel = self._reprocess_selected
+        if not sel or sel == SELECT_NONE:
+            _clear()
+            return
+        name = os.path.basename(sel)  # guard against path traversal
+        processed = self.cfg.capture.get("processed_dir")
+        src = os.path.join(processed or "", name)
+        if not os.path.isfile(src):
+            _clear()
+            return
+        hs_dir = self.cfg.capture.get("highscore_dir", "highscores")
+        thumbs = os.path.join(hs_dir, "thumbs")
+        try:
+            os.makedirs(thumbs, exist_ok=True)
+            out = os.path.join(thumbs, name + ".jpg")
+            # -ss before -i = fast seek; scale to 480px wide (even height) JPG.
+            subprocess.run(
+                ["ffmpeg", "-y", "-loglevel", "error",
+                 "-ss", f"{max(0.0, self._thumb_seconds):.2f}", "-i", src,
+                 "-frames:v", "1", "-vf", "scale=480:-2", "-q:v", "3", out],
+                check=True)
+        except Exception as exc:
+            print(f"  [thumb] failed for {name}: {exc}", flush=True)
+            _clear()
+            return
+        ver = int(time.time())
+        url = f"{self.media_base.rstrip('/')}/thumbs/{name}.jpg?v={ver}"
+        self.client.publish(
+            f"{self.node}/reprocess_thumb",
+            json.dumps({"name": name, "thumb_url": url}), retain=True)
+        print(f"  [thumb] {name} @ {self._thumb_seconds:.1f}s -> {out}",
+              flush=True)
 
     def publish_reprocess_pending(self, clip_name: str,
                                   annotated: bool) -> None:
