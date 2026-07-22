@@ -90,7 +90,7 @@ def _enroll(args) -> int:
 
 
 def _process(args) -> int:
-    from .pipeline import Pipeline, move_to_processed, ClipCancelled
+    from .pipeline import Pipeline, move_to_processed, ClipCancelled, move_to_failed
 
     cfg = load_config(args.config)
     pipe = Pipeline(cfg)
@@ -114,7 +114,7 @@ def _process(args) -> int:
 
 
 def _watch(args) -> int:
-    from .pipeline import Pipeline, move_to_processed, ClipCancelled
+    from .pipeline import Pipeline, move_to_processed, ClipCancelled, move_to_failed
 
     cfg = load_config(args.config)
     inbox = cfg.capture.inbox_dir
@@ -166,6 +166,11 @@ def _watch(args) -> int:
                           flush=True)
                 except Exception as exc:  # keep the worker alive
                     print(f"   ERROR processing {clip}: {exc}", file=sys.stderr)
+                    # Quarantine the offending clip so it isn't retried forever
+                    # (one bad clip would otherwise stall the whole queue).
+                    dst = move_to_failed(cfg, clip)
+                    if dst:
+                        print(f"   -> quarantined to {dst}", file=sys.stderr)
             # Refresh the inbox/processed queue sensors in HA each cycle.
             pipe.ha.publish_queues()
             time.sleep(args.interval)

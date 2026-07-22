@@ -22,6 +22,10 @@ capture:
   clip_seconds: 20       # length of a motion-triggered clip (short = faster turnaround)
   inbox_dir: "/srv/juggle_inbox"        # new clips land here (shared with the HA container)
   processed_dir: "/srv/juggle_processed"  # clips are moved here after analysis
+  # Clips that CRASH processing are quarantined here instead of being retried
+  # forever (one bad clip would otherwise stall the whole queue). Inspect/delete
+  # them manually. Default if unset: a "juggle_failed" sibling of processed_dir.
+  failed_dir: "/srv/juggle_failed"
   # Auto-delete processed clips older than this many days (checked after each
   # clip is moved). 0 = keep forever. Your high-score replays live in
   # highscore_dir and are never pruned by this.

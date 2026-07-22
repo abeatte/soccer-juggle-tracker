@@ -648,3 +648,34 @@ def move_to_processed(cfg: Config, clip_path: str) -> str:
     # Enforce retention on the processed folder (0 = keep forever).
     _prune_old_clips(dst_dir, _safe_int(cfg.capture.get("processed_retention_days", 0)))
     return dst
+
+
+def move_to_failed(cfg: Config, clip_path: str) -> Optional[str]:
+    """Quarantine a clip that crashed during processing so the watcher can't
+    retry it forever (one bad clip would otherwise stall the whole queue).
+
+    Moves the clip (and any sidecar .annotate marker) to capture.failed_dir
+    (default: a 'juggle_failed' sibling of the processed dir). Never raises."""
+    processed = cfg.capture.processed_dir
+    failed_dir = cfg.capture.get("failed_dir") or os.path.join(
+        os.path.dirname(processed.rstrip("/")) or ".", "juggle_failed")
+    try:
+        os.makedirs(failed_dir, exist_ok=True)
+        dst = os.path.join(failed_dir, os.path.basename(clip_path))
+        if os.path.exists(dst):
+            os.remove(dst)  # overwrite an older quarantine of the same name
+        shutil.move(clip_path, dst)
+        marker = clip_path + ".annotate"
+        if os.path.exists(marker):
+            try:
+                mdst = dst + ".annotate"
+                if os.path.exists(mdst):
+                    os.remove(mdst)
+                shutil.move(marker, mdst)
+            except OSError:
+                pass
+        return dst
+    except Exception as exc:  # never let quarantine itself break the worker
+        print(f"  [failed] could not quarantine "
+              f"{os.path.basename(clip_path)}: {exc}", flush=True)
+        return None
