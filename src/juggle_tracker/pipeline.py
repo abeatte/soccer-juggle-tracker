@@ -343,6 +343,10 @@ class Pipeline:
             if os.path.exists(raw):
                 os.remove(raw)
         return res
+
+    def _record(self, session_id, track_id, event, streaks, new_highs) -> None:
+        """Attribute a completed streak to a person, persist it, and collect it
+        for HA publishing. Called from process() when a streak ends."""
         pid = self.resolver.resolve(track_id) if self.resolver else None
         if pid is None:
             # Couldn't attribute to an enrolled kid -> the catch-all profile,
@@ -584,6 +588,20 @@ class Pipeline:
         self.db.close()
 
 
+def _safe_int(value, default: int = 0) -> int:
+    """Coerce a config value to int, tolerating stray trailing text/comments
+    (e.g. a hand-edited 'processed_retention_days: 14 $ ...'). Recovers a leading
+    integer when possible, else returns ``default`` — never raises, so a
+    malformed config value can't crash (and infinitely retry) the pipeline."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        try:
+            return int(str(value).strip().split()[0])
+        except (TypeError, ValueError, IndexError):
+            return default
+
+
 def _prune_old_clips(directory: str, retention_days: int) -> None:
     """Delete video files older than ``retention_days`` from ``directory``.
 
@@ -628,5 +646,5 @@ def move_to_processed(cfg: Config, clip_path: str) -> str:
         else:
             shutil.move(clip_path, dst)
     # Enforce retention on the processed folder (0 = keep forever).
-    _prune_old_clips(dst_dir, int(cfg.capture.get("processed_retention_days", 0) or 0))
+    _prune_old_clips(dst_dir, _safe_int(cfg.capture.get("processed_retention_days", 0)))
     return dst
