@@ -80,6 +80,52 @@ class ClipCancelled(Exception):
     clip instead of archiving it to the processed dir."""
 
 
+class _FfmpegH264Writer:
+    """Minimal cv2.VideoWriter-style sink that encodes H.264 *directly* by
+    piping raw BGR frames into an ffmpeg subprocess.
+
+    OpenCV on this no-AVX2 box can only write mp4v, which browsers won't play —
+    so the old path wrote mp4v then ran a second ffmpeg transcode to H.264. This
+    collapses that into a single streaming encode (no mp4v intermediate, no temp
+    file, no re-decode) and is also slightly higher quality (no mp4v generation
+    loss). Exposes ``write(frame)`` and ``release()`` so it drops into the
+    existing overlay code. The ``scale`` filter rounds odd dims down to even
+    (libx264 + yuv420p requires even), and ``+faststart`` enables progressive
+    web playback."""
+
+    def __init__(self, path: str, width: int, height: int, fps: float = 25.0):
+        self.path = path
+        self.proc = subprocess.Popen(
+            ["ffmpeg", "-y", "-loglevel", "error",
+             "-f", "rawvideo", "-pix_fmt", "bgr24",
+             "-s", f"{int(width)}x{int(height)}", "-r", f"{fps:g}", "-i", "-",
+             "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
+             "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
+             "-movflags", "+faststart", "-an", path],
+            stdin=subprocess.PIPE,
+        )
+
+    def write(self, frame) -> None:
+        try:
+            self.proc.stdin.write(frame.tobytes())
+        except (BrokenPipeError, ValueError, AttributeError):
+            pass  # ffmpeg died; release() surfaces it via a missing/empty file
+
+    def release(self) -> None:
+        try:
+            if self.proc.stdin:
+                self.proc.stdin.close()
+        except Exception:
+            pass
+        try:
+            self.proc.wait(timeout=180)
+        except Exception:
+            try:
+                self.proc.kill()
+            except Exception:
+                pass
+
+
 class Pipeline:
     def __init__(self, cfg: Config):
         self.cfg = cfg
@@ -297,51 +343,36 @@ class Pipeline:
         of the whole clip, regardless of whether it set a record.
 
         The overlay is drawn during the normal detection pass (via the
-        ``debug_video`` output of :meth:`process`), so this costs only ONE extra
-        ffmpeg transcode over a plain run — NOT a second inference pass. Used by
-        the watcher when a reprocess was requested with the "Annotate On
-        Reprocess" switch on. The result is written to a single overwritten file
-        (<highscore_dir>/last_reprocessed.mp4) and its URL is published to HA
-        (sensor.juggle_last_reprocessed)."""
+        ``debug_video`` output of :meth:`process`), which now encodes H.264
+        directly through an ffmpeg pipe — so this costs NO extra transcode and
+        NOT a second inference pass. The result is written to a single
+        overwritten file (<highscore_dir>/last_reprocessed.mp4) and its URL is
+        published to HA (sensor.juggle_last_reprocessed)."""
         hs_dir = self.cfg.capture.get("highscore_dir", "highscores")
         os.makedirs(hs_dir, exist_ok=True)
         ts = time.time()
-        raw = os.path.join(hs_dir, f".reproc_{int(ts)}.mp4")
-        # process() draws the overlay into `raw` (OpenCV mp4v) as it runs.
+        final = os.path.join(hs_dir, "last_reprocessed.mp4")
+        stage = os.path.join(hs_dir, f".reproc_{int(ts)}.mp4")
+        # process() draws the overlay straight to `stage` as browser-playable
+        # H.264 (via _FfmpegH264Writer) as it runs.
         try:
-            res = self.process(clip_path, debug_video=raw)
+            res = self.process(clip_path, debug_video=stage)
         except BaseException:
             # Cancelled or errored mid-run: don't leave a partial overlay temp.
-            if os.path.exists(raw):
-                os.remove(raw)
+            if os.path.exists(stage):
+                os.remove(stage)
             raise
-        final = os.path.join(hs_dir, "last_reprocessed.mp4")
-        try:
-            if os.path.exists(raw) and os.path.getsize(raw) > 0:
-                stage = final + ".part"
-                try:
-                    # Transcode mp4v -> browser-playable H.264 for HA playback.
-                    self._transcode_h264(raw, stage)
-                except Exception as exc:
-                    # Do NOT publish the raw mp4v: browsers can't play it inline,
-                    # so the HA card would render a blank frame behind a valid-
-                    # looking URL. Hide the card instead (empty video_url) and
-                    # leave the previous replay file untouched.
-                    print(f"  [reprocess] H.264 transcode failed ({exc}); "
-                          f"not publishing a non-playable replay", flush=True)
-                    if os.path.exists(stage):
-                        os.remove(stage)
-                    self.ha.publish_reprocess_pending(clip_path, annotated=False)
-                else:
-                    os.replace(stage, final)  # atomic overwrite of the single file
-                    self.ha.publish_last_reprocessed(clip_path, ts)
-                    print(f"  [reprocess] annotated replay -> {final}", flush=True)
-            else:
-                print("  [reprocess] no overlay frames written (empty clip?)",
-                      flush=True)
-        finally:
-            if os.path.exists(raw):
-                os.remove(raw)
+        if os.path.exists(stage) and os.path.getsize(stage) > 0:
+            os.replace(stage, final)  # atomic overwrite of the single file
+            self.ha.publish_last_reprocessed(clip_path, ts)
+            print(f"  [reprocess] annotated replay -> {final}", flush=True)
+        else:
+            # No overlay frames (empty clip / encode failed): hide the card.
+            if os.path.exists(stage):
+                os.remove(stage)
+            print("  [reprocess] no overlay frames written (empty clip?)",
+                  flush=True)
+            self.ha.publish_reprocess_pending(clip_path, annotated=False)
         return res
 
     def _record(self, session_id, track_id, event, streaks, new_highs) -> None:
@@ -417,8 +448,9 @@ class Pipeline:
                     cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 2)
         if writer is None:
             h, w = vis.shape[:2]
-            fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-            writer = cv2.VideoWriter(path, fourcc, 25.0, (w, h))
+            # Encode H.264 directly via an ffmpeg pipe — no mp4v intermediate
+            # and no separate transcode pass.
+            writer = _FfmpegH264Writer(path, w, h, fps=25.0)
         writer.write(vis)
         return writer
 
@@ -492,32 +524,6 @@ class Pipeline:
             if writer is not None:
                 writer.release()
 
-    def _transcode_h264(self, src: str, dst: str) -> None:
-        """Transcode ``src`` to browser-playable H.264/yuv420p via system ffmpeg.
-
-        OpenCV on this no-AVX2 box can only write mp4v, which the HA dashboard /
-        Chrome won't play inline. The system ffmpeg (``libx264``) produces a
-        widely-playable file; ``veryfast`` keeps CPU/heat down and the overlay
-        clip is only 640px so it's quick. ``+faststart`` moves the moov atom to
-        the front for progressive web playback. The ``scale`` filter rounds the
-        frame down to even width/height — the ROI-cropped/downscaled overlay can
-        have an ODD dimension, which ``libx264 -pix_fmt yuv420p`` rejects (it
-        requires even dims); without this the transcode raises and the caller
-        keeps a non-playable mp4v. Raises (``check=True``) on real failure so the
-        caller can fall back."""
-        subprocess.run(
-            ["ffmpeg", "-y", "-loglevel", "error", "-i", src,
-             "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
-             "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
-             # Force the mp4 muxer explicitly: the reprocess path transcodes to a
-             # `last_reprocessed.mp4.part` staging file, and ffmpeg otherwise
-             # infers the container from the extension — `.part` is unknown, so
-             # it aborts with "Unable to choose an output format" (exit 234)
-             # before encoding. `-f mp4` makes the output name irrelevant.
-             "-movflags", "+faststart", "-an", "-f", "mp4", dst],
-            check=True,
-        )
-
     def _capture_highscore_videos(self, clip_path: str,
                                   new_highs: list[dict]) -> None:
         """Save/refresh the per-person high-score replay clip.
@@ -539,19 +545,11 @@ class Pipeline:
             if annotate:
                 # Reflect the extra work in HA's worker-state sensor.
                 self.ha.publish_status("rendering", current=clip_path)
-                raw = os.path.join(hs_dir, f".raw_{int(ts)}.mp4")
-                try:
-                    self._render_annotated(clip_path, raw)
-                    if not os.path.exists(raw) or os.path.getsize(raw) == 0:
-                        raise RuntimeError("annotated render produced no output")
-                    # OpenCV can only emit mp4v on this (no-AVX2/no-H.264) box,
-                    # which browsers / the HA dashboard won't play inline. The
-                    # system ffmpeg (libx264) transcodes the small overlay clip
-                    # to widely-playable H.264.
-                    self._transcode_h264(raw, tmp)
-                finally:
-                    if os.path.exists(raw):
-                        os.remove(raw)
+                # _render_annotated encodes H.264 straight to `tmp` via the
+                # ffmpeg pipe — no mp4v intermediate, no separate transcode.
+                self._render_annotated(clip_path, tmp)
+                if not os.path.exists(tmp) or os.path.getsize(tmp) == 0:
+                    raise RuntimeError("annotated render produced no output")
             else:
                 # Raw HA-recorded clip is already H.264 — just copy it.
                 shutil.copyfile(clip_path, tmp)
