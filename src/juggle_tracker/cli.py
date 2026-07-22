@@ -145,7 +145,9 @@ def _watch(args) -> int:
                         res = pipe.process(clip)
                     for s in res.streaks:
                         print(f"   {s['person']}: {s['count']} ({s['reason']})")
-                    move_to_processed(cfg, clip)
+                    dst = move_to_processed(cfg, clip)
+                    # Surface the just-finished clip in HA (live queue progress).
+                    pipe.ha.publish_last_processed(dst, res.streaks)
                     # Drop the marker only after the clip is handled + moved, so
                     # a mid-run crash re-annotates on the retry.
                     if annotate:

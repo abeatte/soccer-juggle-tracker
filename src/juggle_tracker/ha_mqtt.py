@@ -594,6 +594,22 @@ class HAPublisher:
         self.client.publish(
             f"{self.node}/reprocess_thumb",
             json.dumps({"name": "none", "thumb_url": ""}), retain=True)
+        # "Last processed clip" sensor — updated after EVERY clip (initial or
+        # reprocess) so you can watch a queue drain. The video_url attribute is
+        # populated only when the clip is browser-playable H.264 (a cheap copy,
+        # no transcode); HEVC clips still report name + juggle counts.
+        self.client.publish(
+            f"{self.prefix}/sensor/{self.node}/last_processed/config",
+            json.dumps({
+                "name": "Juggle Last Processed",
+                "unique_id": f"{self.node}_last_processed",
+                "state_topic": f"{self.node}/last_processed",
+                "value_template": "{{ value_json.name | default('none') }}",
+                "json_attributes_topic": f"{self.node}/last_processed",
+                "icon": "mdi:filmstrip",
+                "availability_topic": self.avail_topic,
+                "device": dev,
+            }), retain=True)
 
     def _announce_reprocess_select(self, options: list) -> None:
         """(Re)publish the reprocess `select` discovery with current options."""
@@ -771,6 +787,54 @@ class HAPublisher:
             return float(out) if out else None
         except Exception:
             return None
+
+    def _probe_codec(self, path: str) -> Optional[str]:
+        """Video codec name (e.g. 'h264', 'hevc') via ffprobe, or None."""
+        try:
+            out = subprocess.run(
+                ["ffprobe", "-v", "error", "-select_streams", "v:0",
+                 "-show_entries", "stream=codec_name",
+                 "-of", "default=nw=1:nokey=1", path],
+                check=True, capture_output=True, text=True).stdout.strip()
+            return out or None
+        except Exception:
+            return None
+
+    def publish_last_processed(self, clip_path: str, streaks: list) -> None:
+        """Publish the just-finished clip (any clip, initial or reprocess) so HA
+        can show live progress as a queue drains.
+
+        Serves the clip inline only if it's browser-playable H.264 — a cheap
+        copy to the single overwritten <highscore_dir>/last_processed.mp4, no
+        transcode. HEVC clips still report name + juggle counts (video_url '')."""
+        if not self.enabled:
+            return
+        name = os.path.basename(clip_path)
+        counts = [int(s.get("count", 0)) for s in (streaks or [])]
+        best = max(counts) if counts else 0
+        url = ""
+        if self._probe_codec(clip_path) == "h264":
+            try:
+                hs = self.cfg.capture.get("highscore_dir", "highscores")
+                os.makedirs(hs, exist_ok=True)
+                dst = os.path.join(hs, "last_processed.mp4")
+                tmp = dst + ".part"
+                shutil.copy2(clip_path, tmp)
+                os.replace(tmp, dst)  # atomic swap of the single served file
+                url = f"{self.media_base.rstrip('/')}/last_processed.mp4?v={int(time.time())}"
+            except Exception as exc:
+                print(f"  [last] serve failed for {name}: {exc}", flush=True)
+        summary = ", ".join(
+            f"{s.get('person', '?')} {s.get('count', 0)}"
+            for s in (streaks or [])[:6]
+        ) or "no juggles"
+        self.client.publish(
+            f"{self.node}/last_processed",
+            json.dumps({"name": name, "video_url": url, "best": best,
+                        "attempts": len(counts), "summary": summary,
+                        "ts": int(time.time())}), retain=True)
+        print(f"  [last] {name}: best {best}, {len(counts)} attempts"
+              f"{' (video)' if url else ' (no inline video)'}", flush=True)
 
     def _update_reprocess_thumb(self) -> None:
         """Generate + publish a poster thumbnail for the currently selected
