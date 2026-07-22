@@ -107,8 +107,15 @@ juggle:
                     left_ankle, right_ankle, nose, left_eye, right_eye]
   # Keypoints that make a touch ILLEGAL (hands/arms) → reset streak.
   illegal_keypoints: [left_wrist, right_wrist, left_elbow, right_elbow]
-  # Ground plane: image-y (fraction of frame height) at/below which a ball low
-  # point counts as a FLOOR touch → reset. Calibrate to your yard. 1.0 disables.
+  # Ground touch = the ball's low point drops below the *tracked juggler's feet*
+  # (bottom of their bounding box) plus this margin, in pixels. Because it tracks
+  # the player, it works wherever they stand in the frame (near or far) — a fixed
+  # line can't. Raise it to be more forgiving of low juggles; lower it to catch
+  # drops sooner.
+  ground_margin_px: 40
+  # Fallback ONLY: image-y (fraction of frame height) used as the floor line on
+  # frames where no juggler is detected (so feet-based ground is unavailable).
+  # 1.0 disables the fallback entirely.
   ground_y_frac: 0.92
   # Frames the ball may be UNDETECTED before the current streak is abandoned
   # ("lost"). Raise if the ball detection is intermittent (ball vanishes between

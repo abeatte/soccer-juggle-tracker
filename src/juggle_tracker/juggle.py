@@ -89,8 +89,13 @@ class JuggleCounter:
         frame_index: int,
         ball_xy: Optional[tuple[float, float]],
         keypoints: Optional[Keypoints],
+        ground_y: Optional[float] = None,
     ) -> Optional[StreakEvent]:
-        """Feed one frame. Returns a StreakEvent if a streak just ended."""
+        """Feed one frame. Returns a StreakEvent if a streak just ended.
+
+        ``ground_y`` is the per-frame floor line in image-y (the tracked
+        juggler's feet + margin). When None (no juggler detected this frame) the
+        static ``ground_y_frac`` line is used as a fallback."""
         if ball_xy is None:
             self._missing += 1
             if self._missing >= self.lost_frames_reset and self._streak > 0:
@@ -116,7 +121,8 @@ class JuggleCounter:
         if self._prev_vy > 0 and vy <= 0:
             contact_y = ys[-2]  # the turning-point sample
             if self._is_real_arc(contact_y):
-                event = self._classify_contact(frame_index, contact_y, keypoints)
+                event = self._classify_contact(frame_index, contact_y,
+                                               keypoints, ground_y)
             self._last_contact_y = contact_y
         self._prev_vy = vy
         return event
@@ -135,9 +141,13 @@ class JuggleCounter:
         frame_index: int,
         contact_y: float,
         keypoints: Optional[Keypoints],
+        ground_y: Optional[float] = None,
     ) -> Optional[StreakEvent]:
-        # Ground touch?
-        if contact_y >= self._ground_y:
+        # Ground touch? Prefer the dynamic per-frame ground (the tracked
+        # juggler's feet + margin); fall back to the static line when no juggler
+        # is available this frame.
+        gy = ground_y if ground_y is not None else self._ground_y
+        if contact_y >= gy:
             if self._streak > 0:
                 return self._end_streak("ground", frame_index)
             return None

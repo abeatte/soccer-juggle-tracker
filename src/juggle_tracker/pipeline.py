@@ -120,6 +120,10 @@ class Pipeline:
         # Basename of a clip the operator asked to cancel; the frame loop checks
         # it and raises ClipCancelled when it matches the clip in flight.
         self._cancel_clip: Optional[str] = None
+        # Pixels below the tracked juggler's feet (bbox bottom) at/under which a
+        # ball low-point counts as a floor touch. Dynamic ground follows the
+        # player instead of a fixed frame line.
+        self._ground_margin = float(cfg.juggle.get("ground_margin_px", 40.0))
         self._cur_total: int = 0
         self._cur_frame: int = 0
         self._cur_pct: Optional[float] = None
@@ -242,14 +246,19 @@ class Pipeline:
                 active_track = active.track_id
             kps = last_poses.get(active_track) if active_track is not None else None
 
-            event = counter.update(frame.index, ball_xy, kps)
+            # Dynamic ground = the tracked juggler's feet (bbox bottom) + margin;
+            # None when no one is detected -> counter uses the static fallback.
+            ground_y = (float(active.xyxy[3]) + self._ground_margin
+                        if active is not None else None)
+
+            event = counter.update(frame.index, ball_xy, kps, ground_y=ground_y)
             if event is not None and event.count > 0:
                 self._record(session_id, active_track, event, streaks, new_highs)
 
             if debug_video:
                 writer = self._draw(
                     img, det, ball_xy, ball_bridged, kps, counter,
-                    active_track, writer, debug_video
+                    active_track, writer, debug_video, ground_y=ground_y
                 )
 
         # Flush trailing streak.
@@ -356,7 +365,7 @@ class Pipeline:
             new_highs.append({"person": name, "score": event.count, "pid": pid})
 
     def _draw(self, img, det, ball_xy, ball_bridged, kps, counter, active_track,
-              writer, path):
+              writer, path, ground_y=None):
         vis = img.copy()
         h_img, w_img = vis.shape[:2]
         # ROI border — the analysis frame IS the ROI crop, so this hugs the edge
@@ -364,9 +373,14 @@ class Pipeline:
         cv2.rectangle(vis, (1, 1), (w_img - 2, h_img - 2), (200, 200, 200), 1)
         cv2.putText(vis, "ROI", (4, 14), cv2.FONT_HERSHEY_SIMPLEX, 0.4,
                     (200, 200, 200), 1)
-        gyf = float(self.cfg.juggle.get("ground_y_frac", 0.92))
-        if gyf < 1.0:
-            gy = int(gyf * h_img)
+        # Ground line = floor-touch boundary. Dynamic (the tracked juggler's
+        # feet + margin) when available this frame, else the static fallback.
+        if ground_y is not None:
+            gy = int(ground_y)
+        else:
+            gyf = float(self.cfg.juggle.get("ground_y_frac", 0.92))
+            gy = int(gyf * h_img) if gyf < 1.0 else None
+        if gy is not None and 0 <= gy < h_img:
             cv2.line(vis, (0, gy), (w_img, gy), (0, 0, 255), 1)
             cv2.putText(vis, "ground", (4, max(12, gy - 4)),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
@@ -467,10 +481,12 @@ class Pipeline:
                 if active is not None:
                     active_track = active.track_id
                 kps = last_poses.get(active_track) if active_track is not None else None
-                counter.update(frame.index, ball_xy, kps)
+                ground_y = (float(active.xyxy[3]) + self._ground_margin
+                            if active is not None else None)
+                counter.update(frame.index, ball_xy, kps, ground_y=ground_y)
                 writer = self._draw(
                     img, det, ball_xy, ball_bridged, kps, counter,
-                    active_track, writer, out_path
+                    active_track, writer, out_path, ground_y=ground_y
                 )
         finally:
             src.release()
