@@ -373,13 +373,9 @@ class Pipeline:
         cv2.rectangle(vis, (1, 1), (w_img - 2, h_img - 2), (200, 200, 200), 1)
         cv2.putText(vis, "ROI", (4, 14), cv2.FONT_HERSHEY_SIMPLEX, 0.4,
                     (200, 200, 200), 1)
-        # Ground line = floor-touch boundary. Dynamic (the tracked juggler's
-        # feet + margin) when available this frame, else the static fallback.
-        if ground_y is not None:
-            gy = int(ground_y)
-        else:
-            gyf = float(self.cfg.juggle.get("ground_y_frac", 0.92))
-            gy = int(gyf * h_img) if gyf < 1.0 else None
+        # Ground line = floor-touch boundary: the tracked juggler's feet +
+        # margin. Only drawn on frames where a juggler is detected.
+        gy = int(ground_y) if ground_y is not None else None
         if gy is not None and 0 <= gy < h_img:
             cv2.line(vis, (0, gy), (w_img, gy), (0, 0, 255), 1)
             cv2.putText(vis, "ground", (4, max(12, gy - 4)),
@@ -436,7 +432,6 @@ class Pipeline:
             smooth_window=int(j.get("smooth_window", 5)),
             min_arc_px=float(j.get("min_arc_px", 18)),
             contact_radius_px=float(j.get("contact_radius_px", 90)),
-            ground_y_frac=float(j.get("ground_y_frac", 0.92)),
             valid_keypoints=set(j.get("valid_keypoints", [])) or None,
             illegal_keypoints=set(j.get("illegal_keypoints", [])) or None,
             lost_frames_reset=int(j.get("lost_frames_reset", 15)),

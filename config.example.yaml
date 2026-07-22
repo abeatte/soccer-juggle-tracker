@@ -111,12 +111,9 @@ juggle:
   # (bottom of their bounding box) plus this margin, in pixels. Because it tracks
   # the player, it works wherever they stand in the frame (near or far) — a fixed
   # line can't. Raise it to be more forgiving of low juggles; lower it to catch
-  # drops sooner.
+  # drops sooner. On frames where no juggler is detected, the ground check is
+  # simply skipped (the streak ends via "lost" if the ball disappears).
   ground_margin_px: 40
-  # Fallback ONLY: image-y (fraction of frame height) used as the floor line on
-  # frames where no juggler is detected (so feet-based ground is unavailable).
-  # 1.0 disables the fallback entirely.
-  ground_y_frac: 0.92
   # Frames the ball may be UNDETECTED before the current streak is abandoned
   # ("lost"). Raise if the ball detection is intermittent (ball vanishes between
   # contacts); too high will chain unrelated touches into one streak.

@@ -318,9 +318,6 @@ views:
                 name:
                   type: entity
               - entity: >-
-                  number.front_yard_soccer_juggle_tracker_juggle_ground_line_frac
-                name: Ground line (fallback)
-              - entity: >-
                   number.front_yard_soccer_juggle_tracker_juggle_smoothing_window
                 name:
                   type: entity

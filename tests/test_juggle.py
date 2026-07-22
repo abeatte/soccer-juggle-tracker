@@ -39,7 +39,7 @@ def _hand_kps(x, y):
 def test_counts_clean_juggles():
     ys = _bounce_y(cycles=5, contact=300.0)
     c = JuggleCounter(frame_height=480, smooth_window=5, min_arc_px=18,
-                      contact_radius_px=90, ground_y_frac=0.99)
+                      contact_radius_px=90)
     ball_x = 320.0
     for i, y in enumerate(ys):
         c.update(i, (ball_x, y), _foot_kps(ball_x, 300.0))
@@ -53,7 +53,7 @@ def test_counts_clean_juggles():
 def test_hand_touch_resets():
     ys = _bounce_y(cycles=3, contact=300.0)
     c = JuggleCounter(frame_height=480, smooth_window=5, min_arc_px=18,
-                      contact_radius_px=90, ground_y_frac=0.99)
+                      contact_radius_px=90)
     ball_x = 320.0
     # First arc: foot. Then a hand touch should end the streak.
     contacts_seen = 0
@@ -70,14 +70,15 @@ def test_hand_touch_resets():
 
 
 def test_ground_touch_resets():
-    # Ball bottoms out at the ground line -> floor touch resets.
-    ys = _bounce_y(cycles=2, peak=200.0, contact=470.0)  # 470 >= 0.92*480=441.6
+    # Ball bottoms out below the juggler's feet line -> floor touch resets.
+    ys = _bounce_y(cycles=2, peak=200.0, contact=470.0)
     c = JuggleCounter(frame_height=480, smooth_window=5, min_arc_px=18,
-                      contact_radius_px=90, ground_y_frac=0.92)
+                      contact_radius_px=90)
     ball_x = 320.0
     reasons = []
     for i, y in enumerate(ys):
-        ev = c.update(i, (ball_x, y), _foot_kps(ball_x, 470.0))
+        # Feet line at 442 (bbox bottom + margin); ball bottoms at 470 >= 442.
+        ev = c.update(i, (ball_x, y), _foot_kps(ball_x, 470.0), ground_y=442.0)
         if ev:
             reasons.append(ev.ended_reason)
     c.flush(len(ys))
@@ -88,7 +89,7 @@ def test_ground_touch_resets():
 def test_lost_ball_ends_streak():
     ys = _bounce_y(cycles=3, contact=300.0)
     c = JuggleCounter(frame_height=480, smooth_window=5, min_arc_px=18,
-                      contact_radius_px=90, ground_y_frac=0.99, lost_frames_reset=5)
+                      contact_radius_px=90, lost_frames_reset=5)
     ball_x = 320.0
     n = len(ys)
     for i, y in enumerate(ys):

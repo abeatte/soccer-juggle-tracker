@@ -57,7 +57,6 @@ class JuggleCounter:
     smooth_window: int = 5
     min_arc_px: float = 18.0
     contact_radius_px: float = 90.0
-    ground_y_frac: float = 0.92
     valid_keypoints: set[str] = field(default_factory=lambda: set(VALID_DEFAULT))
     illegal_keypoints: set[str] = field(default_factory=lambda: set(ILLEGAL_DEFAULT))
     lost_frames_reset: int = 15   # ball missing this many frames -> streak lost
@@ -76,7 +75,6 @@ class JuggleCounter:
     def __post_init__(self) -> None:
         self._y_hist = deque(maxlen=max(3, self.smooth_window))
         self._f_hist = deque(maxlen=max(3, self.smooth_window))
-        self._ground_y = self.ground_y_frac * self.frame_height
         # Allow callers to pass None to mean "use defaults".
         if not self.valid_keypoints:
             self.valid_keypoints = set(VALID_DEFAULT)
@@ -95,7 +93,7 @@ class JuggleCounter:
 
         ``ground_y`` is the per-frame floor line in image-y (the tracked
         juggler's feet + margin). When None (no juggler detected this frame) the
-        static ``ground_y_frac`` line is used as a fallback."""
+        ground touch check is skipped for that frame."""
         if ball_xy is None:
             self._missing += 1
             if self._missing >= self.lost_frames_reset and self._streak > 0:
@@ -143,11 +141,8 @@ class JuggleCounter:
         keypoints: Optional[Keypoints],
         ground_y: Optional[float] = None,
     ) -> Optional[StreakEvent]:
-        # Ground touch? Prefer the dynamic per-frame ground (the tracked
-        # juggler's feet + margin); fall back to the static line when no juggler
-        # is available this frame.
-        gy = ground_y if ground_y is not None else self._ground_y
-        if contact_y >= gy:
+        # Ground touch — only when we have the juggler's feet this frame.
+        if ground_y is not None and contact_y >= ground_y:
             if self._streak > 0:
                 return self._end_streak("ground", frame_index)
             return None

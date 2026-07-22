@@ -113,7 +113,7 @@ def discover_clips(source: str, truth_csv: str | None):
 # Parameters that actually move the juggle *count*. Identity/face params are
 # excluded (no enrollment happens in the sandbox, so they cannot affect counts).
 QUICK_PARAMS = [
-    "person_stride", "contact_radius_px", "min_arc_px", "ground_y_frac",
+    "person_stride", "contact_radius_px", "min_arc_px", "ground_margin_px",
     "smooth_window", "lost_frames_reset", "max_bridge_frames", "ball_conf",
 ]
 # 'full' adds the remaining count-relevant knobs (resolution + person conf +
