@@ -246,6 +246,104 @@ def _tune(args) -> int:
     return tune.run(args)
 
 
+def _dump_trace(args) -> int:
+    """Run detection once per clip and write the per-frame observation trace
+    (ball / keypoints / ground) that the counter is fed — for fast, ML-free
+    replay via the ``eval`` command. Side-effect free (HA off, throwaway DB)."""
+    from .pipeline import Pipeline
+    from . import eval_harness as ev
+    from .tune import _sandbox
+
+    cfg = _sandbox(load_config(args.config))
+    # Dumping needs no labels (labels are only used at eval time), so take every
+    # clip under the source path.
+    clips = _list_clip_files(args.source)
+    if not clips:
+        print(f"No clips found at {args.source}", file=sys.stderr)
+        return 2
+    out_dir = args.out or (args.source if os.path.isdir(args.source)
+                           else os.path.dirname(os.path.abspath(args.source)))
+    os.makedirs(out_dir, exist_ok=True)
+    pipe = Pipeline(cfg)
+    n = 0
+    try:
+        for clip in clips:
+            base = os.path.splitext(os.path.basename(clip))[0]
+            out = os.path.join(out_dir, base + ev.TRACE_SUFFIX)
+            with open(out, "w", encoding="utf-8") as fh:
+                # Meta header first, then one JSONL frame per sink call.
+                import cv2
+                cap = cv2.VideoCapture(clip)
+                h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 1080
+                fps = float(cap.get(cv2.CAP_PROP_FPS)) or 0.0
+                cap.release()
+                fh.write(_json_meta(clip, h, fps) + "\n")
+                pipe.process(clip, trace_sink=ev.make_trace_sink(fh))
+            print(f"  wrote {out}")
+            n += 1
+    finally:
+        pipe.close()
+    print(f"Dumped {n} trace(s) to {out_dir}")
+    return 0 if n else 2
+
+
+def _eval(args) -> int:
+    """Replay labelled traces through the counter (no ML) and score the
+    longest-streak error. Optional ``--set juggle.min_contact_gap_frames=8``
+    overrides let you A/B a parameter instantly against a whole trace set."""
+    from . import eval_harness as ev
+    from .tune import label_from_filename
+
+    cfg = load_config(args.config)
+    params = ev.counter_params_from_cfg(cfg)
+    for kv in (args.set or []):
+        key, _, val = kv.partition("=")
+        leaf = key.split(".")[-1]
+        if leaf not in params:
+            print(f"  ! ignoring unknown --set key '{key}' "
+                  f"(known: {', '.join(sorted(params))})", file=sys.stderr)
+            continue
+        params[leaf] = int(val) if leaf.endswith(("frames", "window")) else float(val)
+
+    traces = sorted(glob.glob(os.path.join(args.traces, "*" + ev.TRACE_SUFFIX))) \
+        if os.path.isdir(args.traces) else [args.traces]
+    labelled: list[tuple[str, int]] = []
+    for t in traces:
+        # Trace name is "<clip-stem>.trace.jsonl"; strip the suffix for labels.
+        stem = os.path.basename(t)
+        if stem.endswith(ev.TRACE_SUFFIX):
+            stem = stem[:-len(ev.TRACE_SUFFIX)]
+        lbl = label_from_filename(stem)
+        if lbl is None:
+            print(f"  ! skipping (no count in name): {stem}", file=sys.stderr)
+            continue
+        labelled.append((t, lbl))
+    if not labelled:
+        print("No labelled traces found. Name clips like '5_juggles.mp4' or "
+              "dump traces from such clips.", file=sys.stderr)
+        return 2
+    report = ev.evaluate(labelled, params)
+    print(ev.format_report(report))
+    return 0
+
+
+def _list_clip_files(source: str) -> list:
+    if os.path.isfile(source):
+        return [source]
+    out: list = []
+    for ext in ("*.mp4", "*.mkv", "*.mov", "*.avi"):
+        out += glob.glob(os.path.join(source, ext))
+        out += glob.glob(os.path.join(source, ext.upper()))
+    return sorted(set(out))
+
+
+def _json_meta(clip: str, frame_height: int, fps: float) -> str:
+    import json
+    return json.dumps({"meta": {"clip": os.path.basename(clip),
+                                "frame_height": int(frame_height),
+                                "fps": float(fps)}})
+
+
 def _bench(args) -> int:
     """Micro-benchmark the model stack to estimate real per-clip processing time."""
     import numpy as np
@@ -505,6 +603,23 @@ def main(argv=None) -> int:
     from . import tune as _tune_mod
     _tune_mod.add_arguments(ptune)
     ptune.set_defaults(func=_tune)
+
+    pdt = sub.add_parser(
+        "dump-trace",
+        help="Run detection once and dump per-frame counter traces (for `eval`)")
+    pdt.add_argument("source", help="A clip file or a directory of clips")
+    pdt.add_argument("--out", help="Directory to write .trace.jsonl files "
+                                   "(default: alongside the clips)")
+    pdt.set_defaults(func=_dump_trace)
+
+    pev = sub.add_parser(
+        "eval",
+        help="Replay labelled traces through the counter (no ML) and score")
+    pev.add_argument("traces", help="A .trace.jsonl file or a directory of them")
+    pev.add_argument("--set", action="append", metavar="juggle.KEY=VALUE",
+                     help="Override a counter param for this run (repeatable), "
+                          "e.g. --set juggle.min_contact_gap_frames=8")
+    pev.set_defaults(func=_eval)
 
     args = p.parse_args(argv)
     return args.func(args)

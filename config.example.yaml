@@ -106,6 +106,14 @@ juggle:
   min_arc_px: 18
   # Max px distance from ball-at-contact to a body keypoint to attribute the touch.
   contact_radius_px: 90
+  # Minimum frames between two counted contacts (refractory period). A real
+  # juggle cycle is well over a handful of frames at 25 fps, so a closer pair of
+  # arc-bottoms is almost certainly the same bounce detected twice — reject it.
+  min_contact_gap_frames: 6
+  # When a contact lands on a pose-skipped frame (pose runs every person_stride
+  # frames), reuse the last pose if it's at most this many frames old; otherwise
+  # the contact is left unclassified rather than blindly counted.
+  kp_staleness_frames: 6
   # Keypoints that make a juggle VALID (COCO-17 names).
   valid_keypoints: [left_shoulder, right_shoulder, left_knee, right_knee,
                     left_ankle, right_ankle, nose, left_eye, right_eye]

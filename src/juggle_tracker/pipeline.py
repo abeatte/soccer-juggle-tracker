@@ -205,7 +205,8 @@ class Pipeline:
             return True
         return False
 
-    def process(self, clip_path: str, debug_video: Optional[str] = None) -> ClipResult:
+    def process(self, clip_path: str, debug_video: Optional[str] = None,
+                trace_sink=None) -> ClipResult:
         src = FrameSource(
             clip_path,
             roi=self.cfg.roi,
@@ -296,6 +297,12 @@ class Pipeline:
             # None when no one is detected -> counter uses the static fallback.
             ground_y = (float(active.xyxy[3]) + self._ground_margin
                         if active is not None else None)
+
+            # Optional per-frame observation tap: lets the eval harness dump the
+            # exact (ball, keypoints, ground_y) trace fed to the counter so it
+            # can be replayed through the state machine with zero ML cost.
+            if trace_sink is not None:
+                trace_sink(frame.index, ball_xy, kps, ground_y)
 
             event = counter.update(frame.index, ball_xy, kps, ground_y=ground_y)
             if event is not None and event.count > 0:
@@ -471,6 +478,8 @@ class Pipeline:
             valid_keypoints=set(j.get("valid_keypoints", [])) or None,
             illegal_keypoints=set(j.get("illegal_keypoints", [])) or None,
             lost_frames_reset=int(j.get("lost_frames_reset", 15)),
+            min_contact_gap_frames=int(j.get("min_contact_gap_frames", 6)),
+            kp_staleness_frames=int(j.get("kp_staleness_frames", 6)),
         )
 
     def _render_annotated(self, clip_path: str, out_path: str) -> None:
