@@ -13,6 +13,8 @@
 #   * Calibration panel (23 numbers + Ball-CV switch, Apply & Restart / Revert)
 #   * Inbox delete (dropdown + Delete Selected Inbox Clip — cancels the in-flight
 #     run if the selected clip is the one being processed)
+#   * Reassign High Score (From/To person dropdowns + Reassign button — moves a
+#     misattributed record, e.g. an Unknown Juggler score that was really a kid)
 #   * Queue & Reprocess (inbox/processed counts, reprocess file + annotate switch)
 #   * Last Annotated Reprocess replay (3 ANDed visibility conditions)
 #
@@ -449,6 +451,38 @@ views:
                 text: >-
                   Delete the selected inbox clip? If it's processing now, the
                   run is cancelled.
+        visibility:
+          - condition: user
+            users:
+              - d0f74d3b9c434882829a4a12a467bb22
+      - type: grid
+        cards:
+          - type: entities
+            title: 🔀 Reassign High Score
+            entities:
+              - entity: select.front_yard_soccer_juggle_tracker_juggle_reassign_from
+                name: From (wrong person)
+              - entity: select.front_yard_soccer_juggle_tracker_juggle_reassign_to
+                name: To (correct person)
+          - show_name: true
+            show_icon: true
+            type: button
+            entity: button.front_yard_soccer_juggle_tracker_reassign_high_score
+            name: Reassign High Score
+            icon: mdi:account-switch
+            tap_action:
+              action: toggle
+              confirmation:
+                text: >-
+                  Move the "From" person's current high score (and its replay
+                  clip) to the "To" person? This rewrites the leaderboard.
+          - type: markdown
+            content: >
+              Fixes a misattributed record — e.g. an **Unknown Juggler** high
+              score that was actually one of the kids. Pick who it's wrongly
+              credited to (From), who really earned it (To), then press
+              Reassign. The replay video follows the score when it becomes the
+              new best.
         visibility:
           - condition: user
             users:

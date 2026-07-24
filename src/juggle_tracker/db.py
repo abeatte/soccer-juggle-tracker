@@ -260,3 +260,83 @@ class Database:
 
     def close(self) -> None:
         self.conn.close()
+
+
+def reassign_current_high(conn, source_id: int, target_id: int) -> Optional[dict]:
+    """Move a person's *current* high-score attempt to another person.
+
+    This fixes a misattribution — e.g. an "Unknown Juggler" record that was
+    actually one of the enrolled kids. It re-points the source's single best
+    attempt (its max ``count``, which is exactly the streak that set the source's
+    denormalized ``high_score`` and whose replay clip is ``people.high_clip``) to
+    ``target_id``, then recomputes ``high_score`` for BOTH people from their
+    remaining attempts (same ``MAX(count)`` rule as :meth:`Database.abort_session`).
+
+    It deliberately does NOT touch ``high_clip`` / the replay ``.mp4`` and does
+    NOT commit: the caller reconciles the video file and commits, so the whole
+    reassignment lands as one transaction. This keeps DB logic free of any
+    filesystem/slug concerns (which live in the HA publisher) and unit-testable.
+
+    Runs on whatever connection the caller supplies — the MQTT handler passes a
+    short-lived per-thread connection (SQLite connections aren't shareable across
+    threads), tests pass a temp DB. Never uses a module-global connection.
+
+    Returns a summary dict, or ``None`` when the source/target id is unknown or
+    the source has no attempt to move::
+
+        {
+          "moved_attempt_id": int,     # the attempts.id that was re-pointed
+          "moved_count":      int,     # its juggle count (the score being moved)
+          "src_new_high":     int,     # source high score after removal
+          "tgt_old_high":     int,     # target high score before the move
+          "tgt_new_high":     int,     # target high score after the move
+          "src_high_clip":    str|None,# source's replay path before the move
+          "src_high_clip_at": float|None,
+        }
+    """
+    src = conn.execute(
+        "SELECT high_score, high_clip, high_clip_at FROM people WHERE id = ?",
+        (source_id,),
+    ).fetchone()
+    tgt = conn.execute(
+        "SELECT high_score FROM people WHERE id = ?", (target_id,)
+    ).fetchone()
+    if src is None or tgt is None:
+        return None
+    # The source's current high score == its highest-count attempt, and that is
+    # the attempt whose clip is stored in people.high_clip. Ties broken by most
+    # recent so we move the freshest clip.
+    best = conn.execute(
+        "SELECT id, count FROM attempts WHERE person_id = ? "
+        "ORDER BY count DESC, created_at DESC LIMIT 1",
+        (source_id,),
+    ).fetchone()
+    if best is None:
+        return None
+    moved_id = int(best["id"])
+    moved_count = int(best["count"])
+    tgt_old_high = int(tgt["high_score"])
+
+    conn.execute(
+        "UPDATE attempts SET person_id = ? WHERE id = ?", (target_id, moved_id)
+    )
+
+    def _recompute(pid: int) -> int:
+        row = conn.execute(
+            "SELECT MAX(count) AS hi FROM attempts WHERE person_id = ?", (pid,)
+        ).fetchone()
+        hi = int(row["hi"]) if row and row["hi"] is not None else 0
+        conn.execute("UPDATE people SET high_score = ? WHERE id = ?", (hi, pid))
+        return hi
+
+    src_new_high = _recompute(source_id)
+    tgt_new_high = _recompute(target_id)
+    return {
+        "moved_attempt_id": moved_id,
+        "moved_count": moved_count,
+        "src_new_high": src_new_high,
+        "tgt_old_high": tgt_old_high,
+        "tgt_new_high": tgt_new_high,
+        "src_high_clip": src["high_clip"],
+        "src_high_clip_at": src["high_clip_at"],
+    }

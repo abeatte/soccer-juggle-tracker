@@ -130,8 +130,23 @@ class HAPublisher:
         self.client.subscribe(self.inbox_select_topic)
         self.client.subscribe(self.delete_topic)
         self.client.subscribe(self.thumb_seconds_topic)
+        # Reassign-a-high-score control: move one person's CURRENT high score
+        # (and its replay clip) to another person — e.g. an "Unknown Juggler"
+        # record that was actually your kid. Two `select`s (source/target
+        # person) + a trigger `button`, mirroring the inbox-delete pattern. The
+        # dropdown options are the enrolled roster, refreshed in `sync_all`.
+        self.reassign_source_topic = f"{self.node}/reassign_source/set"
+        self.reassign_target_topic = f"{self.node}/reassign_target/set"
+        self.reassign_topic = f"{self.node}/reassign/set"
+        self._reassign_source: Optional[str] = None
+        self._reassign_target: Optional[str] = None
+        self._last_people_options: Optional[list] = None
+        self.client.subscribe(self.reassign_source_topic)
+        self.client.subscribe(self.reassign_target_topic)
+        self.client.subscribe(self.reassign_topic)
         self.announce_queues()
         self.publish_queues()
+        self.announce_reassign()
 
     # ------------------------------------------------------------------
     def _device(self) -> dict:
@@ -239,6 +254,20 @@ class HAPublisher:
                                     payload or SELECT_NONE, retain=True)
             elif topic == self.delete_topic:
                 self._do_delete_inbox()
+            elif topic == self.reassign_source_topic:
+                self._reassign_source = (
+                    None if (not payload or payload == SELECT_NONE) else payload
+                )
+                self.client.publish(f"{self.node}/reassign_source",
+                                    payload or SELECT_NONE, retain=True)
+            elif topic == self.reassign_target_topic:
+                self._reassign_target = (
+                    None if (not payload or payload == SELECT_NONE) else payload
+                )
+                self.client.publish(f"{self.node}/reassign_target",
+                                    payload or SELECT_NONE, retain=True)
+            elif topic == self.reassign_topic:
+                self._do_reassign()
             elif topic == self.thumb_seconds_topic:
                 try:
                     self._thumb_seconds = max(0.0, min(60.0, float(payload)))
@@ -771,6 +800,188 @@ class HAPublisher:
         self.client.publish(f"{self.node}/inbox_select", SELECT_NONE,
                             retain=True)
 
+    # ------------------------------------------------------------------
+    def announce_reassign(self) -> None:
+        """Discovery for the reassign-high-score control: two person `select`s
+        (source / target) + a trigger `button`. Options are seeded with just
+        "(none)" and filled with the enrolled roster by :meth:`sync_all`."""
+        if not self.enabled:
+            return
+        self._announce_reassign_selects([SELECT_NONE])
+        self._last_people_options = [SELECT_NONE]
+        self.client.publish(f"{self.node}/reassign_source", SELECT_NONE,
+                            retain=True)
+        self.client.publish(f"{self.node}/reassign_target", SELECT_NONE,
+                            retain=True)
+        # Destructive-ish (rewrites the leaderboard + moves a clip) — the HA
+        # card should attach a tap confirmation, like the delete/reset buttons.
+        self.client.publish(
+            f"{self.prefix}/button/{self.node}/reassign/config",
+            json.dumps({
+                "name": "Reassign High Score",
+                "unique_id": f"{self.node}_reassign",
+                "command_topic": self.reassign_topic,
+                "payload_press": "reassign",
+                "icon": "mdi:account-switch",
+                "entity_category": "config",
+                "availability_topic": self.avail_topic,
+                "device": self._device(),
+            }), retain=True)
+
+    def _announce_reassign_selects(self, options: list) -> None:
+        """(Re)publish the source/target person `select` discovery configs."""
+        for key, label, icon in (
+            ("reassign_source", "Reassign From", "mdi:account-arrow-right"),
+            ("reassign_target", "Reassign To", "mdi:account-arrow-left"),
+        ):
+            self.client.publish(
+                f"{self.prefix}/select/{self.node}/{key}/config",
+                json.dumps({
+                    "name": f"Juggle {label}",
+                    "unique_id": f"{self.node}_{key}",
+                    "state_topic": f"{self.node}/{key}",
+                    "command_topic": f"{self.node}/{key}/set",
+                    "options": options,
+                    "icon": icon,
+                    "entity_category": "config",
+                    "availability_topic": self.avail_topic,
+                    "device": self._device(),
+                }), retain=True)
+
+    def _do_reassign(self) -> None:
+        """Move the source person's CURRENT high score (and its replay clip) to
+        the target person — for fixing a misattribution (e.g. an "Unknown
+        Juggler" record that was really one of the kids).
+
+        Re-points the source's best attempt to the target and recomputes both
+        leaderboard scores (delegated to :func:`db.reassign_current_high`), then
+        reconciles the replay video: if the moved score becomes the target's new
+        best, the source's replay `.mp4` is moved onto the target; otherwise the
+        source's now-orphaned replay is removed. The source always loses its
+        replay (its new, lower best has no saved video — clips are overwrite-in-
+        place, so only the record clip ever existed).
+
+        Runs on the MQTT network thread, so it uses its own short-lived SQLite
+        connection (never the pipeline's ``self.db``)."""
+        from .db import reassign_current_high
+
+        src_name = self._reassign_source
+        tgt_name = self._reassign_target
+        if not src_name or src_name == SELECT_NONE:
+            print("  [reassign] no source person selected", flush=True)
+            return
+        if not tgt_name or tgt_name == SELECT_NONE:
+            print("  [reassign] no target person selected", flush=True)
+            return
+        if src_name == tgt_name:
+            print("  [reassign] source and target are the same person",
+                  flush=True)
+            return
+
+        hs_dir = self.cfg.capture.get("highscore_dir", "highscores")
+        src_slug, tgt_slug = _slug(src_name), _slug(tgt_name)
+        src_file = os.path.join(hs_dir, f"{src_slug}.mp4")
+        tgt_file = os.path.join(hs_dir, f"{tgt_slug}.mp4")
+
+        result = None
+        src_row = tgt_row = None
+        try:
+            conn = sqlite3.connect(self.cfg.database.path, timeout=5)
+            try:
+                conn.row_factory = sqlite3.Row
+                ids = {r["name"]: int(r["id"])
+                       for r in conn.execute("SELECT id, name FROM people")}
+                if src_name not in ids or tgt_name not in ids:
+                    print(f"  [reassign] unknown person(s): {src_name!r} / "
+                          f"{tgt_name!r}", flush=True)
+                    return
+                src_pid, tgt_pid = ids[src_name], ids[tgt_name]
+
+                result = reassign_current_high(conn, src_pid, tgt_pid)
+                if result is None:
+                    print(f"  [reassign] {src_name} has no recorded attempt to "
+                          f"move", flush=True)
+                    return
+                if result["moved_count"] <= 0:
+                    print(f"  [reassign] {src_name} has no positive score to "
+                          f"move", flush=True)
+                    return
+
+                # --- reconcile the replay video ---
+                became_best = result["moved_count"] > result["tgt_old_high"]
+                if became_best:
+                    moved_ok = False
+                    if result["src_high_clip"] and os.path.isfile(src_file):
+                        try:
+                            os.replace(src_file, tgt_file)  # clip depicts this score
+                            moved_ok = True
+                        except OSError as exc:
+                            print(f"  [reassign] clip move failed: {exc}",
+                                  flush=True)
+                    if moved_ok:
+                        ts = result["src_high_clip_at"] or time.time()
+                        conn.execute(
+                            "UPDATE people SET high_clip = ?, high_clip_at = ? "
+                            "WHERE id = ?", (tgt_file, float(ts), tgt_pid))
+                    else:
+                        # New best but no source clip to move: clear the target's
+                        # stale lower-score clip so it can't misrepresent the new
+                        # record, and drop any orphaned source file.
+                        for f in (tgt_file, src_file):
+                            try:
+                                os.remove(f)
+                            except OSError:
+                                pass
+                        conn.execute(
+                            "UPDATE people SET high_clip = NULL, "
+                            "high_clip_at = NULL WHERE id = ?", (tgt_pid,))
+                else:
+                    # Target keeps its own (still-best) clip; the source's best
+                    # moved away, so its retained clip is orphaned — remove it.
+                    try:
+                        os.remove(src_file)
+                    except OSError:
+                        pass
+                # Either way the source no longer owns a replay for its new,
+                # lower best (no saved video exists for it).
+                conn.execute(
+                    "UPDATE people SET high_clip = NULL, high_clip_at = NULL "
+                    "WHERE id = ?", (src_pid,))
+                conn.commit()
+
+                src_row = conn.execute(
+                    "SELECT high_score, high_clip, high_clip_at FROM people "
+                    "WHERE id = ?", (src_pid,)).fetchone()
+                tgt_row = conn.execute(
+                    "SELECT high_score, high_clip, high_clip_at FROM people "
+                    "WHERE id = ?", (tgt_pid,)).fetchone()
+            finally:
+                conn.close()
+        except Exception as exc:
+            print(f"  [reassign] failed: {exc}", flush=True)
+            return
+
+        # Republish both leaderboard entries so HA reflects the change now.
+        if src_row is not None:
+            self.publish_high(src_name, int(src_row["high_score"]),
+                              has_clip=bool(src_row["high_clip"]),
+                              updated=src_row["high_clip_at"])
+        if tgt_row is not None:
+            self.publish_high(tgt_name, int(tgt_row["high_score"]),
+                              has_clip=bool(tgt_row["high_clip"]),
+                              updated=tgt_row["high_clip_at"])
+        # Reset both dropdowns to "(none)".
+        self._reassign_source = None
+        self._reassign_target = None
+        self.client.publish(f"{self.node}/reassign_source", SELECT_NONE,
+                            retain=True)
+        self.client.publish(f"{self.node}/reassign_target", SELECT_NONE,
+                            retain=True)
+        print(f"  [reassign] moved {result['moved_count']} juggles from "
+              f"{src_name} -> {tgt_name} "
+              f"(now {src_name}={int(src_row['high_score'])}, "
+              f"{tgt_name}={int(tgt_row['high_score'])})", flush=True)
+
     @staticmethod
     def _fmt_duration(seconds: float) -> str:
         """Format seconds as m:ss (e.g. 20.4 -> '0:20')."""
@@ -1053,6 +1264,7 @@ class HAPublisher:
         ``people`` is an iterable of rows/dicts with ``name``, ``high_score``
         and optional ``high_clip`` / ``high_clip_at`` (as returned by
         ``Database.list_people``)."""
+        people = list(people)
         for p in people:
             name = p["name"]
             self.announce_person(name)
@@ -1063,6 +1275,13 @@ class HAPublisher:
                 has_clip=bool(p["high_clip"]) if "high_clip" in p.keys() else False,
                 updated=p["high_clip_at"] if "high_clip_at" in p.keys() else None,
             )
+        # Keep the reassign dropdowns' options in sync with the enrolled roster
+        # (includes Unknown Juggler, which is the usual reassignment source).
+        if self.enabled:
+            names = [SELECT_NONE] + [p["name"] for p in people]
+            if names != self._last_people_options:
+                self._announce_reassign_selects(names)
+                self._last_people_options = names
 
     def close(self) -> None:
         if self.client is not None:
