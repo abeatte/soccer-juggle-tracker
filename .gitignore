@@ -40,3 +40,5 @@ clips/
 
 # Face enrollment images (PII of your kids — never commit)
 enroll_images/
+
+test_data/

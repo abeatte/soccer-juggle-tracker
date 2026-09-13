@@ -1,0 +1,14 @@
+services:
+  homeassistant:
+    container_name: homeassistant
+    image: ghcr.io/home-assistant/home-assistant:stable
+    restart: unless-stopped
+    privileged: true
+    network_mode: host
+    devices:
+      - /dev/dri/renderD128:/dev/dri/renderD128
+    volumes:
+      - ./configs:/config
+      - /etc/localtime:/etc/localtime:ro
+      - ${JUGGLE_INBOX_HOST:-/srv/juggle_inbox}:/media/juggle_inbox
+      - ${JUGGLE_HIGHSCORES_HOST:-/srv/juggle_highscores}:/config/www/juggle:ro

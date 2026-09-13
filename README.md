@@ -66,6 +66,33 @@ python -m juggle_tracker.cli watch
 python -m juggle_tracker.cli scores
 ```
 
+## Service layout
+
+The repository is organized into four independently operated services:
+
+| Folder | Independent responsibility | Connects through |
+|---|---|---|
+| [`frigate/`](frigate/) | Watches the Reolink streams, detects people, records video, and publishes camera events | MQTT to Mosquitto; camera RTSP input |
+| [`homeassistant/`](homeassistant/) | Provides the UI, automations, clip recording, notifications, and MQTT-discovered sensors | MQTT to Mosquitto; shared `/srv/juggle_inbox` and high-score media |
+| [`soccer_juggler/`](soccer_juggler/) | Processes inbox clips, counts per-person juggles, stores SQLite results, and publishes scores | Shared inbox/processed directories; MQTT to Mosquitto |
+| [`mosquitto/`](mosquitto/) | Routes MQTT events and retained state between the other services | TCP port `1883`; Docker network `mosquitto_default` |
+
+Each folder has its own setup, lifecycle, log, and verification instructions.
+They can be stopped independently: Frigate can keep recording, Home Assistant
+can keep serving its UI, Mosquitto can keep routing messages, and the soccer
+worker can be paused without losing the other services. The complete path is:
+
+```text
+Reolink camera -> Frigate -> MQTT/Mosquitto -> Home Assistant person event
+Home Assistant -> shared inbox MP4 -> Soccer Juggler -> SQLite + MQTT
+MQTT/Mosquitto -> Home Assistant sensors, dashboard, notifications, replays
+```
+
+Start Mosquitto before Frigate, and start Home Assistant before enabling its
+clip-recording automation. The native soccer worker is recommended on the
+target CPU; its optional compose deployment is documented in
+[`soccer_juggler/README.md`](soccer_juggler/README.md).
+
 ## Pipeline stages
 
 ```

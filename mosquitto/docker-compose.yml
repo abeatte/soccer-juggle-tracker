@@ -12,3 +12,7 @@ services:
       - ./config:/mosquitto/config
       - ./data:/mosquitto/data
       - ./log:/mosquitto/log
+
+networks:
+  default:
+    name: mosquitto_default

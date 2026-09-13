@@ -1,0 +1,19 @@
+services:
+  soccer-juggler:
+    build:
+      context: ..
+      dockerfile: soccer_juggler/Dockerfile
+    container_name: soccer-juggler
+    restart: unless-stopped
+    cpus: "1.5"
+    working_dir: /app
+    volumes:
+      - ../config.yaml:/app/config.yaml:ro
+      - ../models:/app/models:ro
+      - ../data:/app/data
+      - ../inbox:/srv/juggle_inbox
+      - ../processed:/srv/juggle_processed
+      - ../enroll_images:/app/enroll_images
+      - ../highscores:/srv/juggle_highscores
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

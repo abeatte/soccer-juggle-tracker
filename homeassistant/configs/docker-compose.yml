@@ -6,7 +6,9 @@ services:
     devices:
       - /dev/dri/renderD128:/dev/dri/renderD128
     volumes:
-      - /home/<username>/homeassistant/config:/config
+      # Run this compose file from homeassistant/configs, or replace the
+      # source with the absolute path to this configuration directory.
+      - .:/config
       - /etc/localtime:/etc/localtime:ro
       - /srv/juggle_inbox:/media/juggle_inbox
       - /srv/juggle_highscores:/config/www/juggle:ro
