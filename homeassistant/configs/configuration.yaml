@@ -1,0 +1,31 @@
+
+# Loads default set of integrations. Do not remove.
+default_config:
+
+# Load frontend themes from the themes folder
+frontend:
+  themes: !include_dir_merge_named themes
+
+automation: !include automations.yaml
+script: !include scripts.yaml
+scene: !include scenes.yaml
+
+homeassistant:
+  allowlist_external_dirs:
+    - /media/juggle_inbox
+
+mqtt:
+  sensor:
+    - name: "Juggle Last Session"
+      unique_id: juggle_tracker_last_session
+      state_topic: "juggle_tracker/last_session"
+      value_template: >-
+        {{ (value_json.results | length) if value_json.results is defined else 0 }}
+      unit_of_measurement: "streaks"
+      icon: mdi:soccer
+      json_attributes_topic: "juggle_tracker/last_session"
+      device:
+        identifiers: ["juggle_tracker"]     # MUST match the publisher's device id
+        name: "Soccer Juggle Tracker"
+        manufacturer: "DIY"
+        model: "RLC-810A CV pipeline"

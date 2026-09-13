@@ -27,6 +27,36 @@ We **decouple capture from compute**:
   camera ──motion──▶ record short clip ──▶ inbox/ ──▶ batch worker ──▶ SQLite ──▶ MQTT ──▶ Home Assistant
 ```
 
+### System diagram
+
+```mermaid
+flowchart LR
+    A[Camera / RTSP source] --> B{Trigger source}
+    B --> C[Home Assistant automation]
+    B --> D[Frigate + Coral detector]
+    C --> E[Clip written to shared inbox]
+    D --> E
+    E --> F[Tracker watch loop\ncli.py _watch]
+    F --> G[Pipeline.process]
+    G --> H[Person + Ball detection]
+    H --> I[Pose estimation]
+    I --> J[Face identity matching]
+    H --> K[Juggle state machine]
+    J --> L[SQLite database\npeople / attempts / high scores]
+    K --> L
+    L --> M[MQTT discovery + HA sensors]
+    M --> N[Home Assistant dashboard / automations]
+    G --> O[Processed / failed archive folders]
+    D --> P[Coral USB accelerator\noptional]
+
+    style A fill:#e8f0fe,stroke:#4a6ea9
+    style D fill:#e6f7e6,stroke:#2d7d46
+    style E fill:#fff4e5,stroke:#b86b00
+    style F fill:#f3e8ff,stroke:#7c3aed
+    style L fill:#fce7f3,stroke:#be185d
+    style M fill:#ecfeff,stroke:#0f766e
+```
+
 The *source* clip is full framerate, so no fast ball contacts are lost — only the
 *analysis* is slow, which is acceptable. Scores appear a few minutes after a
 session rather than instantly. To stay **as close to real time as possible**:

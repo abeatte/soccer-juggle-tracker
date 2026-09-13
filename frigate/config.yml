@@ -1,0 +1,148 @@
+# Frigate config tailored for:
+#   Camera : Reolink RLC-810A (4K/8MP; main = H.265, sub = H.264 640x480)
+#   Host   : 2012 MacBook Pro, i7-3740QM (Ivy Bridge), Intel HD 4000, Ubuntu
+#   CPU    : AVX yes / AVX2 NO  ->  object detection OK; face/LPR/semantic NOT supported
+#   Detect : CPU detector (swap to Coral EdgeTPU later — see bottom)
+#
+# Goal delivered: a searchable LOG of persons, animals, vehicles with snapshots
+# (Frigate Web UI -> Explore / Review) + MQTT events into Home Assistant.
+
+mqtt:
+  # Option A (preferred): broker container/service name on the shared Docker network
+  host: mosquitto
+  # Option B (fallback): this MacBook's LAN IP, e.g.
+  # host:
+  port: 1883
+  user: mqtt_broker                 # a HA user allowed on Mosquitto
+  password: <password>                     # the password for that user
+
+# ---- Detector: CPU only (HD 4000 can't do OpenVINO; no Coral yet) ----
+detectors:
+#  cpu1:
+#    type: cpu
+#    num_threads: 3           # leave cores for ffmpeg + HA/Matter containers
+  coral:
+    type: edgetpu
+    device: usb
+
+# Pull each RTSP stream once, fan out to detect/record.
+go2rtc:
+  streams:
+    front_yard:
+      - rtsp://<FRIGATE_IP>:554/h264Preview_01_main
+    front_yard_sub:
+      - rtsp://<FRIGATE_IP>:554/h264Preview_01_sub
+    back_yard:
+      - rtsp://<FRIGATE_IP>:554/h264Preview_01_main
+    back_yard_sub:
+      - rtsp://<FRIGATE_IP>:554/h264Preview_01_sub
+
+# Enrichments intentionally DISABLED — require AVX2, which Ivy Bridge lacks.
+# Do not enable on this hardware; they will fail to load.
+#   face_recognition:   { enabled: false }
+#   lpr:                { enabled: false }
+#   semantic_search:    { enabled: false }
+
+cameras:
+  back_yard:
+    ffmpeg:
+      hwaccel_args: preset-vaapi # Uses the correct 2012/2013 legacy driver preset
+      inputs:
+        - path: rtsp://<FRIGATE_IP>:8554/back_yard_sub    # low-res -> detection
+          roles: [detect]
+        - path: rtsp://<FRIGATE_IP>:8554/back_yard        # 4K H.265 -> recording
+          roles: [record]
+      output_args:
+        record: preset-record-generic-audio-copy
+    zones:
+      ...
+    motion:
+      ...
+    record:
+      enabled: true
+      alerts:
+        retain: {days: 30}
+      detections:
+        retain: {days: 30}
+      continuous:
+        days: 0
+      motion:
+        days: 7
+  front_yard:
+    ffmpeg:
+      # H.264 substream decodes cheaply on CPU. If you want to try offloading
+      # decode to the HD 4000 iGPU, change to preset-vaapi (needs i965-va-driver
+      # on Ubuntu for Gen7). If VAAPI errors, revert to preset-cpu below.
+      # hwaccel_args: preset-cpu # not supported on server
+      hwaccel_args: preset-vaapi # Uses the correct 2012/2013 legacy driver preset
+      inputs:
+        - path: rtsp://<FRIGATE_IP>:8554/front_yard_sub    # low-res -> detection
+          roles: [detect]
+        - path: rtsp://<FRIGATE_IP>:8554/front_yard         # 4K H.265 -> recording
+          roles: [record]
+      output_args:
+        record: preset-record-generic-audio-copy         # set to '-an' style preset to drop audio for privacy
+
+    detect:
+      enabled: true
+      width: 640            # MATCH the RLC-810A substream (verify in Reolink app)
+      height: 480
+      fps: 5                # low fps keeps this old CPU comfortable
+
+    objects:
+      track:
+        - person
+        - car
+        - bicycle
+        - motorcycle
+        - bus
+        - dog
+        - cat
+      filters:
+        person: {min_score: 0.5, threshold: 0.7}
+        car: {min_score: 0.5, threshold: 0.7}
+
+    zones:
+      ...
+    motion:
+      ...
+    snapshots:
+      enabled: true
+      bounding_box: true
+      retain:
+        default: 30          # keep object snapshots 30 days (your "log")
+
+    record:
+      enabled: true
+      alerts:
+        retain: {days: 30}
+      detections:
+        retain: {days: 30}
+      continuous:
+        days: 0
+      motion:
+        days: 7
+
+version: 0.17-0
+
+# ---------------------------------------------------------------------------
+# LATER: add a Google Coral USB (~$60) to make detection near-free on this CPU.
+# 1) Uncomment 'privileged: true' and the /dev/bus/usb device in docker-compose.yml
+# 2) Replace the detectors block above with:
+#      detectors:
+#        coral:
+#          type: edgetpu
+#          device: usb
+# Coral does NOT enable face/LPR — those still need an AVX2 CPU or a GPU.
+# ---------------------------------------------------------------------------
+semantic_search:
+  enabled: false # not supported
+  model_size: small
+face_recognition:
+  enabled: false # not supported
+  model_size: small
+lpr:
+  enabled: false # not supported
+classification:
+  bird:
+    enabled: true

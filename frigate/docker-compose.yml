@@ -1,0 +1,50 @@
+# Frigate for the 2012 MacBook Pro (i7-3740QM / Ivy Bridge / Intel HD 4000)
+# running Ubuntu, alongside your existing Home Assistant + Mosquitto containers.
+#
+# Detector = CPU (no Coral yet). No OpenVINO: HD 4000 (Gen7) is unsupported.
+# Enrichments (face/LPR/semantic) are OFF in config.yml — this CPU lacks AVX2.
+#
+# NETWORKING: Frigate must reach your Mosquitto container. Two options:
+#   (A) Preferred — join the same Docker network your HA/Mosquitto compose creates,
+#       then set  mqtt.host: mosquitto  (the broker's container/service name).
+#   (B) Fallback — point mqtt.host at this MacBook's LAN IP (broker port 1883
+#       must be published to the host, which HA setups usually already do).
+#
+# Edit the external network name below to match your existing stack
+# (find it with:  docker network ls   /   docker inspect <mosquitto-container>).
+
+services:
+  frigate:
+    container_name: frigate
+    image: ghcr.io/blakeblackshear/frigate:stable
+    restart: unless-stopped
+    shm_size: "140mb"            # one camera; raise if you add more
+    # privileged only needed for Coral USB passthrough; omit for CPU-only.
+    # privileged: true
+    devices:
+      # iGPU node — used ONLY for optional VAAPI H.264 *decode* of the substream,
+      # not for detection. Safe to leave; remove if /dev/dri doesn't exist.
+      - /dev/dri/renderD128:/dev/dri/renderD128
+      # Uncomment when you add a Coral USB accelerator:
+      - /dev/bus/usb:/dev/bus/usb
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - ./config:/config
+      - ./storage:/media/frigate          # recordings + snapshots (point at a big disk)
+      - type: tmpfs
+        target: /tmp/cache
+        tmpfs:
+          size: 1000000000
+    ports:
+      - "8971:8971"     # authenticated Web UI / API  ->  http://<macbook-ip>:8971
+      - "5000:5000"
+      - "8554:8554"     # go2rtc RTSP restream
+      - "8555:8555/tcp"
+      - "8555:8555/udp"
+    networks:
+      - mosquitto_default        # <-- rename to the network your HA/Mosquitto compose uses
+
+networks:
+  mosquitto_default:
+    external: true
+    # name: mosquitto_default   # uncomment/set if it differs from 'ha_stack'
