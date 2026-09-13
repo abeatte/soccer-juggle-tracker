@@ -12,67 +12,41 @@
 
 camera:
   # Reolink RLC-810A RTSP. The RLC-810A exposes two streams:
-  #   main : rtsp://USER:PASS@IP:554/h264Preview_01_main   (4K, for the record)
-  #   sub  : rtsp://USER:PASS@IP:554/h264Preview_01_sub     (lower res, faster analysis)
+  #   main : rtsp://admin:<pwd>@<IP>:554/h264Preview_01_main   (4K, for the record)
+  #   sub  : rtsp://admin:<pwd>@<IP>:554/h264Preview_01_sub     (lower res, faster analysis)
   # We RECORD from main (full detail/framerate) and ANALYZE downscaled frames.
-  rtsp_main: "rtsp://cam_user:CHANGE_ME@192.168.1.50:554/h264Preview_01_main"
+  rtsp_main: "rtsp://admin:<pwd>@<IP>:554/h264Preview_01_main"
   fps: 25                # source framerate of recorded clips
 
 capture:
-  clip_seconds: 20       # length of a motion-triggered clip (short = faster turnaround)
-  inbox_dir: "/srv/juggle_inbox"        # new clips land here (shared with the HA container)
-  processed_dir: "/srv/juggle_processed"  # clips are moved here after analysis
-  # Clips that CRASH processing are quarantined here instead of being retried
-  # forever (one bad clip would otherwise stall the whole queue). Inspect/delete
-  # them manually. Default if unset: a "juggle_failed" sibling of processed_dir.
-  failed_dir: "/srv/juggle_failed"
-  # Auto-delete processed clips older than this many days (checked after each
-  # clip is moved). 0 = keep forever. Your high-score replays live in
-  # highscore_dir and are never pruned by this.
-  processed_retention_days: 0
-  # High-score replay clips: one file per kid (<highscore_dir>/<slug>.mp4),
-  # overwritten in place each time the record is beaten (only the latest is
-  # kept). Bind-mount this host dir into HA at /config/www/juggle so the clips
-  # are served at http://<ha-host>:8123/local/juggle/<slug>.mp4 — see
-  # docs/HOME_ASSISTANT.md.
+  clip_seconds: 60       # length of a motion-triggered clip (short = faster turnaround)
+  inbox_dir: "/srv/juggle_inbox"     # new clips land here (from HA/Reolink or manual copy)
+  processed_dir: "/srv/juggle_processed"   # clips are moved here after analysis
   highscore_dir: "/srv/juggle_highscores"
-  save_highscore_video: true   # capture a replay clip when a record is set
-  # true  = quick annotated second pass (ball/pose/streak overlay) — only runs
-  #         for record-setting clips, so the extra CPU/heat is paid rarely.
-  # false = just copy the raw clip (zero extra processing).
+  save_highscore_video: true
   annotate_highscore: true
-  # Default state of the "Annotate On Reprocess" switch in Home Assistant. When
-  # that switch is ON and you press "Reprocess Selected Clip", the re-run also
-  # writes a browser-playable annotated replay to <highscore_dir>/
-  # last_reprocessed.mp4 (overlay drawn in the SAME detection pass — no extra
-  # inference, just one transcode). The live toggle is remembered by the worker
-  # and resets to this default on restart.
-  reprocess_annotate_default: false
-
-  # Seconds into a clip to grab the preview thumbnail shown under the reprocess
-  # dropdown in HA (helps you pick the right clip). Live-editable from HA (no
-  # restart). 0 = first frame.
-  reprocess_thumbnail_seconds: 2.0
+  processed_retention_days: 14 # 0 = keep forever (default)
 
 # Region of interest in the frame, as fractions [0-1]: x0,y0,x1,y1.
 # Crop to just the play area to cut CPU cost and false detections.
 # On this slow CPU a tight ROI is one of the biggest speed wins.
 # Full frame = [0.0, 0.0, 1.0, 1.0].
-roi: [0.0, 0.0, 1.0, 1.0]
+roi: [0.00, 0.00, 0.77, 1.00]
 
 processing:
   # Analysis resolution (long edge, px). Smaller = faster, less accurate.
   # 640 suits the Ivy-Bridge CPU; bump to 960 only if you later get AVX2 hardware.
-  infer_long_edge: 640
+  infer_long_edge: 960 # was 640 - faster + cooler (small accuracy cost)
   # Run person-detect + pose every Nth frame (interpolate tracks between).
   # The BALL is always detected every frame — it's the fast-moving object.
-  person_stride: 4
+  person_stride: 3 # was 4
   # Cap CPU threads. Measured baseline: HA+Matter use only ~3% CPU total, so the
   # 8-thread i7-3740QM is nearly free during processing. 6 threads speeds up
   # clips while leaving 2 for the system; the practical limit here is HEAT, not
   # contention (idle pkg temp ~71C). If the box thermal-throttles under sustained
   # load, drop to 4 (one per physical core). 0 = auto (leave 2 free).
-  torch_threads: 6
+  torch_threads: 4 # was 6 - cooler, avoid throttle
+  max_bridge_frames: 10 # (raise towards ~15 if dropouts are longer)
 
 models:
   # Ultralytics weights (downloaded by setup.sh into ./models).
@@ -87,7 +61,7 @@ models:
   face_pack: "buffalo_s"               # 's' = small/fast, good for CPU
   # Detection confidence thresholds
   person_conf: 0.35
-  ball_conf: 0.20                      # ball is small/blurry — keep this low
+  ball_conf: 0.10                      # ball is small/blurry — keep this low
   face_conf: 0.45
 
 identity:
@@ -105,81 +79,38 @@ juggle:
   # rejects jitter when the ball is resting/rolling.
   min_arc_px: 18
   # Max px distance from ball-at-contact to a body keypoint to attribute the touch.
-  contact_radius_px: 90
-  # Minimum frames between two counted contacts (refractory period). A real
-  # juggle cycle is well over a handful of frames at 25 fps, so a closer pair of
-  # arc-bottoms is almost certainly the same bounce detected twice — reject it.
-  min_contact_gap_frames: 6
-  # When a contact lands on a pose-skipped frame (pose runs every person_stride
-  # frames), reuse the last pose if it's at most this many frames old; otherwise
-  # the contact is left unclassified rather than blindly counted.
-  kp_staleness_frames: 6
+  contact_radius_px: 110 # was 90
   # Keypoints that make a juggle VALID (COCO-17 names).
   valid_keypoints: [left_shoulder, right_shoulder, left_knee, right_knee,
                     left_ankle, right_ankle, nose, left_eye, right_eye]
   # Keypoints that make a touch ILLEGAL (hands/arms) → reset streak.
   illegal_keypoints: [left_wrist, right_wrist, left_elbow, right_elbow]
-  # Ground touch = the ball's low point drops below the *tracked juggler's feet*
-  # (bottom of their bounding box) plus this margin, in pixels. Because it tracks
-  # the player, it works wherever they stand in the frame (near or far) — a fixed
-  # line can't. Raise it to be more forgiving of low juggles; lower it to catch
-  # drops sooner. On frames where no juggler is detected, the ground check is
-  # simply skipped (the streak ends via "lost" if the ball disappears).
-  ground_margin_px: 40
-  # Frames the ball may be UNDETECTED before the current streak is abandoned
-  # ("lost"). Raise if the ball detection is intermittent (ball vanishes between
-  # contacts); too high will chain unrelated touches into one streak.
-  lost_frames_reset: 15
-  # Bridge SHORT ball-detection dropouts: for up to this many consecutive
-  # missing frames, predict the ball's position (constant velocity from the last
-  # detections) so a brief blackout mid-arc doesn't break counting. 0 disables.
-  # Keep modest — a juggle arc is short; large values invent phantom positions.
-  max_bridge_frames: 8
+  # Ground plane: image-y (fraction of frame height) at/below which a ball low
+  # point counts as a FLOOR touch → reset. Calibrate to your yard. 1.0 disables.
+  ground_y_frac: 0.82
 
-# Classical (OpenCV) ball detector used ONLY on frames where the YOLO detector
-# misses the ball. Shape-based (Hough circles) with an optional HSV color gate,
-# constrained to a window around the last known ball position to cut false
-# positives and cost. Enable if the ball is frequently undetected mid-flight.
 ball_fallback:
-  enabled: false
-  min_radius: 4             # px at infer resolution
+  enabled: true       # off by default
+  min_radius: 4
   max_radius: 40
-  search_radius: 140        # only look within this many px of the last known ball
-  dp: 1.2                   # Hough inverse accumulator resolution
-  hough_param1: 100         # Canny high threshold
-  hough_param2: 18          # accumulator threshold — LOWER = more (looser) circles
-  # Optional HSV color gate (leave null for shape-only). Example white ball:
-  #   hsv_lower: [0, 0, 180]
-  #   hsv_upper: [180, 60, 255]
-  hsv_lower: null
-  hsv_upper: null
+  search_radius: 140
+  hough_param2: 18    # lower = more (looser) circles
+  # optional color gate for a known ball color:
+  # hsv_lower: [0, 0, 180]   # e.g. white ball
+  # hsv_upper: [180, 60, 255]
 
 home_assistant:
   enabled: true
-  mqtt_host: "127.0.0.1"
+  mqtt_host: <HA_IP>  # HA Mosquitto broker IP
   mqtt_port: 1883
   mqtt_user: "mqtt_user"
-  mqtt_password: "CHANGE_ME"
+  mqtt_password: <password>
   discovery_prefix: "homeassistant"   # HA MQTT discovery topic root
   node_id: "juggle_tracker"
-  # Base URL (as seen from a browser on your LAN) where HA serves the
-  # high-score replay clips. With the recommended www/juggle mount this is
-  # http://<ha-host>:8123/local/juggle . Published as the `video_url` attribute
-  # on each kid's high-score sensor.
-  media_base_url: "http://192.168.0.139:8123/local/juggle"
+  media_base_url: "http://<HA_IP>:8123/local/juggle"
 
 database:
   path: "data/juggle.db"
-
-calibration:
-  # Expose the model / juggle-detection params below as EDITABLE Home Assistant
-  # number entities, plus "Apply Calibration & Restart" and "Revert Calibration
-  # to Defaults" buttons (grouped under the device's config section). Editing a
-  # value writes it to calibration_overrides.yaml (deep-merged over this file at
-  # startup, so your commented config.yaml stays pristine). Nothing takes effect
-  # until you press Apply & Restart. Revert deletes the overrides file.
-  enabled: true
-  service_name: "juggle-tracker.service"   # systemctl --user unit restarted on Apply
 
 thermal:
   # Pause processing when the CPU package gets too hot, so an old laptop doesn't

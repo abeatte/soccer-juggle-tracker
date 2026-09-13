@@ -1,0 +1,17 @@
+models:
+  ball_conf: 0.05
+  face_conf: 0.4
+identity:
+  match_threshold: 0.4
+juggle:
+  ground_y_frac: 0.6
+  max_bridge_frames: 4
+  lost_frames_reset: 6
+  min_arc_px: 4.0
+  ground_margin_px: 5.0
+  contact_radius_px: 130.0
+ball_fallback:
+  enabled: true
+  search_radius: 150
+processing:
+  infer_long_edge: 1280
