@@ -241,6 +241,7 @@ def load_config(path: str | None = None) -> Config:
         if candidate and os.path.exists(candidate):
             with open(candidate, "r", encoding="utf-8") as fh:
                 data = yaml.safe_load(fh) or {}
+            _apply_environment_overrides(data)
             # Deep-merge machine-written calibration overrides over the base.
             overrides_path = os.path.join(
                 os.path.dirname(candidate), CALIBRATION_OVERRIDES_FILENAME
@@ -256,6 +257,33 @@ def load_config(path: str | None = None) -> Config:
     raise FileNotFoundError(
         "No config found. Copy config.example.yaml to config.yaml."
     )
+
+
+def _apply_environment_overrides(data: dict[str, Any]) -> None:
+    """Apply optional secret/path overrides supplied by native systemd."""
+    def value(name: str, current: Any) -> Any:
+        return os.environ.get(name) or current
+
+    camera = data.setdefault("camera", {})
+    camera["rtsp_main"] = value("JUGGLE_RTSP_MAIN", camera.get("rtsp_main"))
+
+    capture = data.setdefault("capture", {})
+    for key, env_name in (
+        ("inbox_dir", "JUGGLE_INBOX_DIR"),
+        ("processed_dir", "JUGGLE_PROCESSED_DIR"),
+        ("highscore_dir", "JUGGLE_HIGHSCORE_DIR"),
+    ):
+        capture[key] = value(env_name, capture.get(key))
+
+    home_assistant = data.setdefault("home_assistant", {})
+    for key, env_name in (
+        ("mqtt_host", "JUGGLE_MQTT_HOST"),
+        ("mqtt_user", "JUGGLE_MQTT_USER"),
+        ("mqtt_password", "JUGGLE_MQTT_PASSWORD"),
+    ):
+        home_assistant[key] = value(env_name, home_assistant.get(key))
+    if os.environ.get("JUGGLE_MQTT_PORT"):
+        home_assistant["mqtt_port"] = int(os.environ["JUGGLE_MQTT_PORT"])
 
 
 def _resolve_paths(cfg: Config, root: str) -> None:

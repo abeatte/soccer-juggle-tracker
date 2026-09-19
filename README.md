@@ -25,11 +25,13 @@ that framerate in real time — the ball reverses in 2–3 frames.
 
 So the design **decouples capture from compute**:
 
-1. The camera (or HA) records a **short clip at full framerate (~25 fps)** when a
-   person enters the yard. No fast ball contacts are lost — the *source* is full
-   framerate; only the *analysis* is slower than real time, which is fine.
-2. A **worker on the MacBook** processes each clip frame-by-frame at whatever
-   speed the CPU allows, updates SQLite, and pushes results to Home Assistant.
+1. Frigate records a **short clip at full framerate (~25 fps)** when a person
+  enters the yard. Its inbox bridge exports the completed event clip without
+  involving Home Assistant. No fast ball contacts are lost — the *source* is
+  full framerate; only the *analysis* is slower than real time, which is fine.
+2. The native `systemd` worker on the MacBook processes each clip frame-by-frame
+  at whatever speed the CPU allows, updates SQLite, and pushes results to Home
+  Assistant.
 
 Result: accuracy is preserved, HA stays responsive, and scores appear a few
 minutes after a session instead of instantly. To get **as close to real time as
@@ -73,7 +75,7 @@ The repository is organized into four independently operated services:
 | Folder | Independent responsibility | Connects through |
 |---|---|---|
 | [`frigate/`](frigate/) | Watches the Reolink streams, detects people, records video, and publishes camera events | MQTT to Mosquitto; camera RTSP input |
-| [`homeassistant/`](homeassistant/) | Provides the UI, automations, clip recording, notifications, and MQTT-discovered sensors | MQTT to Mosquitto; shared `/srv/juggle_inbox` and high-score media |
+| [`homeassistant/`](homeassistant/) | Provides the UI, notifications, and MQTT-discovered sensors | MQTT to Mosquitto; high-score media |
 | [`soccer_juggler/`](soccer_juggler/) | Processes inbox clips, counts per-person juggles, stores SQLite results, and publishes scores | Shared inbox/processed directories; MQTT to Mosquitto |
 | [`mosquitto/`](mosquitto/) | Routes MQTT events and retained state between the other services | TCP port `1883`; Docker network `mosquitto_default` |
 
@@ -83,15 +85,14 @@ can keep serving its UI, Mosquitto can keep routing messages, and the soccer
 worker can be paused without losing the other services. The complete path is:
 
 ```text
-Reolink camera -> Frigate -> MQTT/Mosquitto -> Home Assistant person event
-Home Assistant -> shared inbox MP4 -> Soccer Juggler -> SQLite + MQTT
+Reolink camera -> Frigate -> MQTT/Mosquitto -> Frigate inbox bridge
+Frigate event clip -> shared inbox MP4 -> native systemd worker -> SQLite + MQTT
 MQTT/Mosquitto -> Home Assistant sensors, dashboard, notifications, replays
 ```
 
-Start Mosquitto before Frigate, and start Home Assistant before enabling its
-clip-recording automation. The native soccer worker is recommended on the
-target CPU; its optional compose deployment is documented in
-[`soccer_juggler/README.md`](soccer_juggler/README.md).
+Start Mosquitto before Frigate, then start Home Assistant and the native
+`systemd` soccer worker. The Frigate inbox bridge must be running before the
+worker can receive clips.
 
 ## Pipeline stages
 
@@ -131,7 +132,7 @@ Run `python -m juggle_tracker.cli doctor` any time to check the environment
 ## Docs
 
 - [`docs/SETUP.md`](docs/SETUP.md) — install, configure, enroll, run
-- [`docs/DEPLOY.md`](docs/DEPLOY.md) — how it runs on Ubuntu (systemd vs Docker), shared inbox, OpenVINO
+- [`docs/DEPLOY.md`](docs/DEPLOY.md) — native systemd deployment, shared inbox, OpenVINO
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — why batch, the frame pipeline, the juggle state machine
 - [`docs/HOME_ASSISTANT.md`](docs/HOME_ASSISTANT.md) — MQTT discovery, dashboard, automations
 - [`docs/TUNING.md`](docs/TUNING.md) — first-clip calibration + ongoing regression tuning
@@ -154,12 +155,10 @@ Matter. See [`docs/DEPLOY.md`](docs/DEPLOY.md) for the full picture.
   python tools/export_openvino.py      # (or ./setup.sh --openvino)
   ```
 - **Home Assistant package** with the extra sensors + automations (new-high-score
-  TTS, auto-record clips on person detection, nightly leaderboard):
+  TTS, notifications, and nightly leaderboard):
   copy [`homeassistant/packages/juggle_tracker.yaml`](homeassistant/packages/juggle_tracker.yaml)
   into `<config>/packages/`. The per-person high-score sensors themselves appear
   automatically via MQTT discovery.
-- **Docker** is a fully viable alternative on Linux (no VM overhead) — see
-  [`docs/DEPLOY.md`](docs/DEPLOY.md#option-b--docker-good-parity-with-hamatter).
 - **Measure accuracy over time**: `python tools/eval.py ground_truth.csv` scores a
   labelled clip set against your hand counts (sandboxed — never touches real
   scores). See [`docs/TUNING.md`](docs/TUNING.md).

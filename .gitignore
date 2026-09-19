@@ -9,36 +9,18 @@ env/
 
 # Config & secrets (contains RTSP creds + MQTT password)
 config.yaml
+**/.env
 machine-telemetry/machine-telemetry.env
 # Machine-written calibration overrides (tuned per-box via HA)
 calibration_overrides.yaml
 
-# Runtime data
-data/
-clips/
-inbox/
-processed/
-*.db
-*.sqlite
-*.sqlite3
+# # Model weights (downloaded by setup.sh)
+models
 
-# Model weights (downloaded by setup.sh)
-models/*.pt
-models/*.onnx
-
-# Debug output
+# # Debug output
 out*.mp4
-dbg/
-*.dbg.mp4
-*.log
-
-# Tuning: keep ground_truth.csv (filenames+numbers, no PII); ignore the clips.
-clips/
 
 # OS
 .DS_Store
-
-# Face enrollment images (PII of your kids — never commit)
-enroll_images/
 
 test_data/

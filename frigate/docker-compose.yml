@@ -18,6 +18,8 @@ services:
     container_name: frigate
     image: ghcr.io/blakeblackshear/frigate:stable
     restart: unless-stopped
+    env_file:
+      - .env
     shm_size: "140mb"            # one camera; raise if you add more
     # privileged only needed for Coral USB passthrough; omit for CPU-only.
     # privileged: true
@@ -43,6 +45,31 @@ services:
       - "8555:8555/udp"
     networks:
       - mosquitto_default        # <-- rename to the network your HA/Mosquitto compose uses
+
+  frigate-inbox-bridge:
+    build: ./inbox-bridge
+    container_name: frigate-inbox-bridge
+    restart: unless-stopped
+    env_file:
+      - .env
+    depends_on:
+      - frigate
+    environment:
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+      MQTT_USER: ${BRIDGE_MQTT_USER:-}
+      MQTT_PASSWORD: ${BRIDGE_MQTT_PASSWORD:-}
+      # Port 5000 is Frigate's internal API for trusted Docker-network clients.
+      # This avoids depending on a temporary browser JWT from port 8971.
+      FRIGATE_URL: http://frigate:5000
+      INBOX_DIR: /inbox
+      CAMERA_FILTER: ${FRIGATE_CAMERA_FILTER:-front_yard}
+      EVENT_LABEL: person
+      COOLDOWN_SECONDS: ${FRIGATE_INBOX_COOLDOWN_SECONDS:-120}
+    volumes:
+      - ${JUGGLE_INBOX_HOST:-/srv/juggle_inbox}:/inbox
+    networks:
+      - mosquitto_default
 
 networks:
   mosquitto_default:

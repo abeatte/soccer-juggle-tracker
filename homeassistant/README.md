@@ -8,14 +8,16 @@ directory.
 ## Setup
 
 1. Install Docker Engine and the Compose plugin on the Ubuntu host.
-2. Create the shared directories used by the tracker:
+2. Edit `.env` if the high-score directory is not `/srv/juggle_highscores`.
+   This file is gitignored and is loaded by `docker-compose.yml`.
+3. Create the shared directories used by the tracker:
 
    ```bash
    sudo mkdir -p /srv/juggle_inbox /srv/juggle_highscores
    sudo chown -R "$USER":"$USER" /srv/juggle_inbox /srv/juggle_highscores
    ```
 
-3. Review `configs/configuration.yaml`. Copy
+4. Review `configs/configuration.yaml`. Copy
    `packages/juggle_tracker.yaml` into `configs/packages/` and replace its
    `CHANGE_ME` entity IDs and notification services. Enable packages by adding
    this under `homeassistant:` in `configuration.yaml`:
@@ -24,7 +26,7 @@ directory.
    packages: !include_dir_named packages
    ```
 
-4. Create the package directory and required empty include files if this is a
+5. Create the package directory and required empty include files if this is a
    new Home Assistant configuration:
 
    ```bash
@@ -33,7 +35,7 @@ directory.
    cp packages/juggle_tracker.yaml configs/packages/
    ```
 
-5. Configure the MQTT integration in Home Assistant to use the Mosquitto
+6. Configure the MQTT integration in Home Assistant to use the Mosquitto
    broker at `127.0.0.1:1883` when both use host networking. Start Home
    Assistant from this directory:
 
@@ -41,7 +43,7 @@ directory.
    docker compose up -d
    ```
 
-6. Open `http://<host-ip>:8123`, finish onboarding, and add the dashboard from
+7. Open `http://<host-ip>:8123`, finish onboarding, and add the dashboard from
    `dashboards/juggle-tracker-dashboard.yaml` as a manual Lovelace dashboard.
 
 ## Verify and inspect logs

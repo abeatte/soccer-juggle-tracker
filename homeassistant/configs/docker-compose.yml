@@ -10,7 +10,6 @@ services:
       # source with the absolute path to this configuration directory.
       - .:/config
       - /etc/localtime:/etc/localtime:ro
-      - /srv/juggle_inbox:/media/juggle_inbox
       - /srv/juggle_highscores:/config/www/juggle:ro
     restart: unless-stopped
     privileged: true

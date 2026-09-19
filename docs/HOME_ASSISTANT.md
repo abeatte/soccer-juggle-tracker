@@ -80,11 +80,10 @@ Same idea as the shared inbox: HA is in Docker, so bind-mount the host
 `/local/...`, which is exactly what an HTML5 `<video>`/iframe needs.
 
 ```yaml
-# docker-compose.yml for Home Assistant — add one volume line:
+# docker-compose.yml for Home Assistant — add this volume line:
 services:
   homeassistant:
     volumes:
-      - /srv/juggle_inbox:/media/juggle_inbox          # (existing) inbox
       - /srv/juggle_highscores:/config/www/juggle:ro   # <-- add this (read-only)
 ```
 
@@ -467,45 +466,16 @@ mode: queued
 > Because this is **batch** processing, the announcement fires a few minutes
 > after the session ends (when the clip finishes processing), not the instant the
 > record is set.
-## Auto-recording clips into the shared `inbox/`
+## Frigate exports clips into the shared `inbox/`
 
-The batch worker processes whatever lands in its `inbox/`. To feed it
-automatically, have Home Assistant record a clip when the RLC-810A reports a
-person and write it into that folder.
+The batch worker processes whatever lands in its `inbox/`. The Frigate inbox
+bridge listens for completed person events, downloads the event clip from the
+Frigate API, and writes it to the shared host directory. Home Assistant remains
+the dashboard and notification layer; it does not record or copy the video.
 
-### The key fact: HA is in Docker, the tracker is native
+The recommended runtime on this CPU-bound host is the native `systemd` worker.
 
-On your box the tracker runs **natively** (systemd) but **Home Assistant runs in
-a Docker container**. A container can only write to host paths that are
-**bind-mounted** into it. So the wiring is: pick one host directory, mount it
-into the HA container, and point the tracker's `inbox_dir` at the same host path.
-
-```
-  HA container ──writes──▶ /media/juggle_inbox   (path INSIDE the container)
-                                 │  (bind mount)
-  host dir     ◀─────────────────┘  /srv/juggle_inbox   (path ON the host)
-                                 │
-  tracker (native) ──reads──▶ capture.inbox_dir = /srv/juggle_inbox
-```
-
-### Step 1 — pick a host dir and bind-mount it into HA
-
-Choose e.g. `/srv/juggle_inbox` on the host. Add it to however you launch HA:
-
-```yaml
-# docker-compose.yml for Home Assistant — add one volume line:
-services:
-  homeassistant:
-    # ...existing config...
-    volumes:
-      - /srv/juggle_inbox:/media/juggle_inbox   # <-- add this
-```
-
-Or with `docker run`: `-v /srv/juggle_inbox:/media/juggle_inbox`. Recreate the HA
-container so the mount takes effect. (`/media/...` is convenient because HA
-already allows writes there.)
-
-### Step 2 — point the tracker at the same host dir
+### Step 1 — choose the shared host directory
 
 In `config.yaml`:
 
@@ -514,43 +484,29 @@ capture:
   inbox_dir: "/srv/juggle_inbox"
 ```
 
-### Step 3 — HA automation to record on person detection
+### Step 2 — configure the Frigate bridge
 
-```yaml
-alias: Record yard clip on person
-trigger:
-  - platform: state
-    entity_id: binary_sensor.front_yard_person    # RLC-810A person sensor
-    to: "on"
-action:
-  - service: camera.record
-    target:
-      entity_id: camera.front_yard_clear           # main stream = full detail
-    data:
-      duration: 30
-      lookback: 4
-      # This path is INSIDE the HA container (Step 1's mount target).
-      filename: "/media/juggle_inbox/clip_{{ now().strftime('%Y%m%d_%H%M%S') }}.mp4"
-mode: single
+Set `JUGGLE_INBOX_HOST=/srv/juggle_inbox` and the Frigate API/MQTT credentials
+in `frigate/.env`, then start the bridge with:
+
+```bash
+cd frigate
+docker compose up -d --build
+docker compose logs -f frigate-inbox-bridge
 ```
 
-(The ready-made version with a debounce is automation #2 in
-[`homeassistant/packages/juggle_tracker.yaml`](../homeassistant/packages/juggle_tracker.yaml)
-— just set the entity IDs and the `filename` path.)
+The bridge uses a per-camera cooldown and writes clips atomically, so the
+worker never starts on a partially downloaded file.
 
-### Step 4 — permissions
+### Step 3 — permissions
 
-The HA container writes the file as its own user (often root); the native tracker
-reads and then **moves** it to `processed/`. Make sure the tracker's user can
-write in `/srv/juggle_inbox`:
+The bridge writes the file and the native tracker reads then **moves** it to
+`processed/`. Make sure the tracker user can write in `/srv/juggle_inbox`:
 
 ```bash
 sudo chown -R $USER:$USER /srv/juggle_inbox
 sudo chmod 775 /srv/juggle_inbox
 ```
-
-If HA writes root-owned files the tracker can't move, either run HA with a
-matching `PUID/PGID`, or add a group both share and `chmod g+w`.
 
 ### Verify end-to-end
 
@@ -560,13 +516,6 @@ python -m juggle_tracker.cli doctor        # 'inbox dir' should be PASS (writabl
 ls -l /srv/juggle_inbox                     # a clip_*.mp4 should appear
 journalctl --user -u juggle-tracker.service -f   # watch it get processed + moved
 ```
-
-### Alternative — tracker records from RTSP itself
-
-If you'd rather not share a folder, trigger the tracker to pull its own clip:
-call `python -m juggle_tracker.cli record --seconds 30` from an HA
-`shell_command` (or a cron) fired by the person sensor. Simpler folder story, but
-HA already has the stream, so the shared-inbox route above is usually cleaner.
 
 ## Sanity check the MQTT path
 

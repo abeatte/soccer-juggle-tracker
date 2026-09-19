@@ -18,6 +18,7 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=__REPO__
 ExecStart=__REPO__/.venv/bin/python -m juggle_tracker.cli watch
+EnvironmentFile=-__REPO__/soccer_juggler/.env
 
 # Be a good neighbour to Home Assistant / Matter: lowest CPU + IO priority.
 Nice=10

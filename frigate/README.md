@@ -9,11 +9,15 @@ in `/srv/juggle_inbox`; Frigate itself does not run the juggle counter.
 
 1. Start Mosquitto first from `../mosquitto` so the external
    `mosquitto_default` network exists.
-2. Edit `config/config.yml` and replace the camera RTSP URLs and MQTT
-   credentials. The default config is tuned for CPU detection on the target
-   Ivy Bridge host; use a Coral only after changing the detector settings and
-   passing through the USB device.
-3. Confirm `/dev/dri/renderD128` exists or remove that device mapping if this
+2. Edit `.env` and replace the camera RTSP URLs and MQTT credentials with the
+   values from your working deployment. The Frigate config references these
+   `FRIGATE_*` variables, and the bridge uses the bridge/MQTT values from the
+   same file. The file is gitignored. The bridge uses Frigate's internal API
+   on port `5000`, so no Frigate API token is needed.
+3. The default config is tuned for CPU detection on the target Ivy Bridge host;
+   use a Coral only after changing the detector settings and passing through
+   the USB device.
+4. Confirm `/dev/dri/renderD128` exists or remove that device mapping if this
    host has no usable VA-API device. Create storage and start Frigate:
 
    ```bash

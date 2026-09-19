@@ -84,9 +84,10 @@ Enrolled embeddings live in SQLite (`data/juggle.db`). The raw images in
 python -m juggle_tracker.cli record --seconds 30
 ```
 
-**Automatic (recommended):** have Home Assistant / the Reolink integration record
-a clip on person detection and drop it in `inbox/`. See
-[`HOME_ASSISTANT.md`](HOME_ASSISTANT.md#auto-recording-clips-on-person-detection).
+**Automatic (recommended):** run the Frigate inbox bridge. It listens for
+completed person events, downloads the event clip from Frigate, and writes it
+to the shared `inbox/` directory. Home Assistant is not involved in video
+capture; see [`DEPLOY.md`](DEPLOY.md) and [`HOME_ASSISTANT.md`](HOME_ASSISTANT.md).
 
 ## 5. Process
 
@@ -128,8 +129,8 @@ journalctl --user -u juggle-tracker.service -f
 deploy/install-systemd.sh uninstall
 ```
 
-Prefer Docker instead? See [`DEPLOY.md`](DEPLOY.md) — on Linux it runs with no VM
-overhead and shares one `inbox/` volume with Home Assistant.
+The native `systemd` worker is the supported runtime on the target CPU because
+it has the lowest overhead and simplest access to the host inbox.
 
 ## Tuning accuracy
 

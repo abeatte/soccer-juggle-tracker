@@ -26,6 +26,11 @@ mqtt:
       unit_of_measurement: "streaks"
       icon: mdi:soccer
       json_attributes_topic: "juggle_tracker/last_session"
+      device:
+        identifiers: ["juggle_tracker"]
+        name: "Soccer Juggle Tracker"
+        manufacturer: "DIY"
+        model: "RLC-810A CV pipeline"
       # attributes: ts, results[] ({person,count,reason,start_frame,end_frame})
 
 template:
@@ -72,34 +77,7 @@ automation:
           message: "{{ person }} set a new personal best: {{ score }} juggles."
     mode: queued
 
-  # 2) Auto-record a yard clip when the camera detects a person, writing it into
-  #    the tracker's inbox/ (same folder on this MacBook). The batch worker picks
-  #    it up automatically.
-  - id: juggle_record_on_person
-    alias: "Juggle: record clip on person detected"
-    trigger:
-      - platform: state
-        entity_id: binary_sensor.front_yard_person   # CHANGE_ME (RLC-810A person sensor)
-        to: "on"
-    # Don't spam: skip if we recorded in the last 2 minutes.
-    condition:
-      - condition: template
-        value_template: >-
-          {{ (now() - (state_attr('automation.juggle_record_on_person','last_triggered')
-             or (now() - timedelta(minutes=5)))).total_seconds() > 120 }}
-    action:
-      - service: camera.record
-        target:
-          entity_id: camera.front_yard   # CHANGE_ME (main/clear stream preferred)
-        data:
-          duration: 30
-          lookback: 4
-          # Point this at the SAME directory as the tracker's capture.inbox_dir
-          # (a shared bind-mount / symlink between the HA container and the host).
-          filename: "/media/juggle_inbox/clip_{{ now().strftime('%Y%m%d_%H%M%S') }}.mp4"
-    mode: single
-
-  # 3) Optional: nightly leaderboard summary notification.
+  # 2) Optional: nightly leaderboard summary notification.
   - id: juggle_nightly_leaderboard
     alias: "Juggle: nightly leaderboard"
     trigger:
