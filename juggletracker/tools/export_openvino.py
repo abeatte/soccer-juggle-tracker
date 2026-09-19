@@ -29,7 +29,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from juggle_tracker.config import load_config  # noqa: E402
+from juggletracker.config import load_config  # noqa: E402
 
 
 def _export_one(pt_path: str, imgsz: int, int8: bool) -> str:

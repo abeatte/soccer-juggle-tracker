@@ -1,11 +1,7 @@
 # Python
 __pycache__/
-*.py[cod]
 *.egg-info/
-.eggs/
 .venv/
-venv/
-env/
 
 # Config & secrets (contains RTSP creds + MQTT password)
 config.yaml

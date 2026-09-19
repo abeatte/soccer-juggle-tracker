@@ -8,7 +8,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from juggle_tracker.db import Database, reassign_current_high  # noqa: E402
+from juggletracker.db import Database, reassign_current_high  # noqa: E402
 
 
 def _db(tmp_path):

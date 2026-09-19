@@ -31,7 +31,7 @@ import tempfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from juggle_tracker.config import load_config  # noqa: E402
+from juggletracker.config import load_config  # noqa: E402
 
 
 def _sandbox(cfg):
@@ -52,7 +52,7 @@ def main(argv=None) -> int:
                    help="If set, write an overlay video per clip here")
     args = p.parse_args(argv)
 
-    from juggle_tracker.pipeline import Pipeline  # heavy import; after argparse
+    from juggletracker.pipeline import Pipeline  # heavy import; after argparse
 
     cfg = _sandbox(load_config(args.config))
     pipe = Pipeline(cfg)

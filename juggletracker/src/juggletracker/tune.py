@@ -7,7 +7,7 @@ labels as closely as possible, then (optionally) writes the winning values into
 ``calibration_overrides.yaml`` — the same file the Home Assistant calibration
 sliders edit.
 
-Exposed for both the CLI (``juggle_tracker.cli tune``) and the standalone
+Exposed for both the CLI (``juggletracker.cli tune``) and the standalone
 ``tools/tune.py`` wrapper:
   * :func:`label_from_filename`, :func:`discover_clips`
   * :func:`add_arguments` — register the CLI flags on an argparse parser
@@ -427,7 +427,7 @@ def run(args) -> int:
 def main(argv=None) -> int:
     """Standalone entry point (own argparse)."""
     p = argparse.ArgumentParser(
-        prog="juggle_tracker.tune", description=__doc__,
+        prog="juggletracker.tune", description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
     add_arguments(p, include_config=True)
     args = p.parse_args(argv)

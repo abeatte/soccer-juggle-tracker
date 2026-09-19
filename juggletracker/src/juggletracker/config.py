@@ -223,7 +223,7 @@ class Config:
 
 
 def _project_root() -> str:
-    # src/juggle_tracker/config.py -> repo root is three levels up.
+    # src/juggletracker/config.py -> repo root is three levels up.
     return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 

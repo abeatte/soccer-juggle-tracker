@@ -7,7 +7,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from juggle_tracker.juggle import JuggleCounter  # noqa: E402
+from juggletracker.juggle import JuggleCounter  # noqa: E402
 
 
 def _bounce_y(cycles, peak=200.0, contact=300.0, step=20.0):

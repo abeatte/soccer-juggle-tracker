@@ -1,14 +1,14 @@
 """Command-line interface.
 
-    python -m juggle_tracker.cli enroll  --name "Kid1"   [--images DIR | --webcam]
-    python -m juggle_tracker.cli process CLIP.mp4        [--debug-video out.mp4]
-    python -m juggle_tracker.cli watch                    # batch worker: watch inbox
-    python -m juggle_tracker.cli scores                   # print the scoreboard
-    python -m juggle_tracker.cli backfill-unknown         # credit old NULL streaks to Unknown
-    python -m juggle_tracker.cli record  --seconds 30     # grab a clip from RTSP
-    python -m juggle_tracker.cli doctor                   # preflight env checks
-    python -m juggle_tracker.cli bench                     # model FPS + per-clip estimate
-    python -m juggle_tracker.cli tune CLIPS_DIR [--write]  # auto-calibrate from labelled clips
+    python -m juggletracker.cli enroll  --name "Kid1"   [--images DIR | --webcam]
+    python -m juggletracker.cli process CLIP.mp4        [--debug-video out.mp4]
+    python -m juggletracker.cli watch                    # batch worker: watch inbox
+    python -m juggletracker.cli scores                   # print the scoreboard
+    python -m juggletracker.cli backfill-unknown         # credit old NULL streaks to Unknown
+    python -m juggletracker.cli record  --seconds 30     # grab a clip from RTSP
+    python -m juggletracker.cli doctor                   # preflight env checks
+    python -m juggletracker.cli bench                     # model FPS + per-clip estimate
+    python -m juggletracker.cli tune CLIPS_DIR [--write]  # auto-calibrate from labelled clips
 """
 from __future__ import annotations
 
@@ -559,7 +559,7 @@ def _doctor(args) -> int:
 
 
 def main(argv=None) -> int:
-    p = argparse.ArgumentParser(prog="juggle_tracker", description=__doc__)
+    p = argparse.ArgumentParser(prog="juggletracker", description=__doc__)
     p.add_argument("--config", default=None, help="Path to config.yaml")
     sub = p.add_subparsers(dest="cmd", required=True)
 

@@ -8,8 +8,8 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from juggle_tracker.juggle import JuggleCounter  # noqa: E402
-from juggle_tracker import eval_harness as ev  # noqa: E402
+from juggletracker.juggle import JuggleCounter  # noqa: E402
+from juggletracker import eval_harness as ev  # noqa: E402
 
 
 def _foot(x, y):
