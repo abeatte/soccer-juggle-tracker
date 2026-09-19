@@ -170,9 +170,9 @@ Private. Not for redistribution.
 ## Bonus: host telemetry in Home Assistant
 
 The same box also runs Home Assistant and Frigate. The
-[`machine-telemetry/`](machine-telemetry/) folder holds a tiny companion daemon
+[`machinetelemetry/`](machinetelemetry/) folder holds a tiny companion daemon
 that publishes live host stats — CPU %, **CPU temperature**, **fan RPM**, load,
 memory, disk, uptime, and Frigate's container CPU/mem — to Home Assistant over
 MQTT discovery (same pattern as `ha_mqtt.py`). It reuses this repo's `.venv` and
 installs as its own `systemd --user` service. See
-[`machine-telemetry/README.md`](machine-telemetry/README.md).
+[`machinetelemetry/README.md`](machinetelemetry/README.md).

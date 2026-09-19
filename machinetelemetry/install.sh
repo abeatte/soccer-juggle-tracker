@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# Install (or uninstall) the machine-telemetry publisher as a systemd --user
+# Install (or uninstall) the machinetelemetry publisher as a systemd --user
 # service on Ubuntu. Reuses the repo's shared .venv (created by ./setup.sh);
 # paho-mqtt is already a project dependency. Lingering is enabled so it also
 # starts at boot without an active login.
 #
-#   machine-telemetry/install.sh            # install + start (user service)
-#   machine-telemetry/install.sh uninstall  # stop + remove
+#   machinetelemetry/install.sh            # install + start (user service)
+#   machinetelemetry/install.sh uninstall  # stop + remove
 #
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
-DIR="$REPO/machine-telemetry"
-UNIT="machine-telemetry.service"
+DIR="$REPO/machinetelemetry"
+UNIT="machinetelemetry.service"
 TEMPLATE="$DIR/$UNIT"
 
 render() { sed "s|__REPO__|$REPO|g" "$TEMPLATE"; }
@@ -40,7 +40,7 @@ fi
 if [[ ! -f "$DIR/machine-telemetry.env" ]]; then
   cp "$DIR/config.example.env" "$DIR/machine-telemetry.env"
   chmod 600 "$DIR/machine-telemetry.env"
-  echo ">> Created machine-telemetry/machine-telemetry.env — EDIT IT (set MQTT_PASS) before starting."
+  echo ">> Created machinetelemetry/machine-telemetry.env — EDIT IT (set MQTT_PASS) before starting."
 fi
 
 mkdir -p "$HOME/.config/systemd/user"
@@ -56,4 +56,4 @@ echo "  1. Edit $DIR/machine-telemetry.env   (set MQTT_PASS, confirm MQTT_USER)"
 echo "  2. systemctl --user start $UNIT"
 echo "  3. systemctl --user status $UNIT"
 echo "  4. journalctl --user -u $UNIT -f"
-echo "  Uninstall: machine-telemetry/install.sh uninstall"
+echo "  Uninstall: machinetelemetry/install.sh uninstall"

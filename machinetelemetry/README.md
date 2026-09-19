@@ -1,4 +1,4 @@
-# machine-telemetry → Home Assistant
+# machinetelemetry → Home Assistant
 
 A small daemon that publishes **live host telemetry** from the box (the 2012
 MacBook Pro running Ubuntu that hosts Home Assistant, Frigate, and the juggle
@@ -36,10 +36,10 @@ already a project dependency, so there's nothing extra to install.
 
 ```bash
 ./setup.sh                       # if you haven't already created .venv
-machine-telemetry/install.sh
-nano machine-telemetry/machine-telemetry.env    # set MQTT_PASS, confirm MQTT_USER
-systemctl --user start machine-telemetry.service
-systemctl --user status machine-telemetry.service
+machinetelemetry/install.sh
+nano machinetelemetry/machine-telemetry.env    # set MQTT_PASS, confirm MQTT_USER
+systemctl --user start machinetelemetry.service
+systemctl --user status machinetelemetry.service
 ```
 
 ### MQTT account
@@ -55,7 +55,7 @@ to disable — everything else still works.
 
 ## Verify
 ```bash
-journalctl --user -u machine-telemetry.service -f
+journalctl --user -u machinetelemetry.service -f
 ```
 In HA: **Settings → Devices & Services → MQTT → Frigate Box (MacBook Pro)** — the
 sensors appear within one publish cycle (~15 s). Raw feed:
@@ -89,5 +89,5 @@ mode: single
 
 ## Uninstall
 ```bash
-machine-telemetry/install.sh uninstall
+machinetelemetry/install.sh uninstall
 ```

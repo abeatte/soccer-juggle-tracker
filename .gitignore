@@ -5,8 +5,7 @@ __pycache__/
 
 # Config & secrets (contains RTSP creds + MQTT password)
 config.yaml
-**/.env
-machine-telemetry/machine-telemetry.env
+**/*.env
 # Machine-written calibration overrides (tuned per-box via HA)
 calibration_overrides.yaml
 
