@@ -53,45 +53,45 @@ template:
             {{ top.person }}
           {% else %}unknown{% endif %}
 
-automation:
-  # 1) Announce a new personal record (fires a few minutes after the session,
-  #    since processing is batch/offline).
-  - id: juggle_new_high_score_announce
-    alias: "Juggle: announce new high score"
-    trigger:
-      - platform: mqtt
-        topic: "juggle_tracker/event/new_high_score"
-    variables:
-      person: "{{ trigger.payload_json.person }}"
-      score: "{{ trigger.payload_json.score }}"
-    action:
-      # Speak it (swap for your TTS engine / speaker).
-      - service: tts.google_translate_say   # CHANGE_ME
-        data:
-          entity_id: media_player.kitchen_speaker   # CHANGE_ME
-          message: "New juggling record! {{ person }} just hit {{ score }} juggles."
-      # And push a phone notification.
-      - service: notify.mobile_app_phone   # CHANGE_ME
-        data:
-          title: "⚽ New juggle record!"
-          message: "{{ person }} set a new personal best: {{ score }} juggles."
-    mode: queued
-
-  # 2) Optional: nightly leaderboard summary notification.
-  - id: juggle_nightly_leaderboard
-    alias: "Juggle: nightly leaderboard"
-    trigger:
-      - platform: time
-        at: "20:30:00"
-    action:
-      - service: notify.mobile_app_phone   # CHANGE_ME
-        data:
-          title: "⚽ Juggle leaderboard"
-          message: >-
-            {% set kids = states.sensor
-               | selectattr('entity_id','search','_juggle_high_score')
-               | sort(attribute='state', reverse=true) | list %}
-            {% if kids | length == 0 %}No scores yet.{% else %}
-            {%- for k in kids %}{{ k.attributes.friendly_name | replace(' Juggle High Score','') }}: {{ k.state }}{{ '\n' if not loop.last }}{% endfor %}
-            {% endif %}
-    mode: single
+# automation:
+#   # 1) Announce a new personal record (fires a few minutes after the session,
+#   #    since processing is batch/offline).
+#   - id: juggle_new_high_score_announce
+#     alias: "Juggle: announce new high score"
+#     trigger:
+#       - platform: mqtt
+#         topic: "juggle_tracker/event/new_high_score"
+#     variables:
+#       person: "{{ trigger.payload_json.person }}"
+#       score: "{{ trigger.payload_json.score }}"
+#     action:
+#       # Speak it (swap for your TTS engine / speaker).
+#       - service: tts.google_translate_say   # CHANGE_ME
+#         data:
+#           entity_id: media_player.kitchen_speaker   # CHANGE_ME
+#           message: "New juggling record! {{ person }} just hit {{ score }} juggles."
+#       # And push a phone notification.
+#       - service: notify.mobile_app_phone   # CHANGE_ME
+#         data:
+#           title: "⚽ New juggle record!"
+#           message: "{{ person }} set a new personal best: {{ score }} juggles."
+#     mode: queued
+# 
+#   # 2) Optional: nightly leaderboard summary notification.
+#   - id: juggle_nightly_leaderboard
+#     alias: "Juggle: nightly leaderboard"
+#     trigger:
+#       - platform: time
+#         at: "20:30:00"
+#     action:
+#       - service: notify.mobile_app_phone   # CHANGE_ME
+#         data:
+#           title: "⚽ Juggle leaderboard"
+#           message: >-
+#             {% set kids = states.sensor
+#                | selectattr('entity_id','search','_juggle_high_score')
+#                | sort(attribute='state', reverse=true) | list %}
+#             {% if kids | length == 0 %}No scores yet.{% else %}
+#             {%- for k in kids %}{{ k.attributes.friendly_name | replace(' Juggle High Score','') }}: {{ k.state }}{{ '\n' if not loop.last }}{% endfor %}
+#             {% endif %}
+#     mode: single
