@@ -9,9 +9,6 @@ config.yaml
 # Machine-written calibration overrides (tuned per-box via HA)
 calibration_overrides.yaml
 
-# # Model weights (downloaded by setup.sh)
-models
-
 # # Debug output
 out*.mp4
 
