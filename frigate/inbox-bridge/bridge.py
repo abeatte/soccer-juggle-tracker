@@ -48,6 +48,11 @@ class InboxBridge:
             for value in os.environ.get("CAMERA_FILTER", "").split(",")
             if value.strip()
         }
+        self.zones = {
+            value.strip()
+            for value in os.environ.get("ZONE_FILTER", "").split(",")
+            if value.strip()
+        }
         self.cooldown = env_int("COOLDOWN_SECONDS", 120)
         self.retries = env_int("DOWNLOAD_RETRIES", 12)
         self.retry_seconds = env_int("DOWNLOAD_RETRY_SECONDS", 5)
@@ -78,6 +83,17 @@ class InboxBridge:
         event_id = after.get("id", "")
         if not event_id or (self.cameras and camera not in self.cameras):
             return
+        if self.zones:
+            entered_zones = set(after.get("entered_zones") or [])
+            current_zones = set(after.get("current_zones") or [])
+            if not self.zones & (entered_zones | current_zones):
+                LOG.debug(
+                    "Skipping event %s — zones %s not in filter %s",
+                    event_id,
+                    entered_zones | current_zones,
+                    self.zones,
+                )
+                return
         if event_id in self.seen:
             return
         now = time.monotonic()

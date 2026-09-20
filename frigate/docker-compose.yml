@@ -64,6 +64,7 @@ services:
       FRIGATE_URL: http://frigate:5000
       INBOX_DIR: /inbox
       CAMERA_FILTER: ${FRIGATE_CAMERA_FILTER:-front_yard}
+      ZONE_FILTER: ${FRIGATE_ZONE_FILTER:-}
       EVENT_LABEL: person
       COOLDOWN_SECONDS: ${FRIGATE_INBOX_COOLDOWN_SECONDS:-120}
     volumes:
