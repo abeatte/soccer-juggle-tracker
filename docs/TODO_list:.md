@@ -7,3 +7,5 @@
 6. log `ls -al /srv/juggle_inbox/ /srv/juggle_processed/ /srv/juggle_failed/` as useful to get processing state of the system
 7. convert MIGRATION.md into the SOP for deploying new changes (NOTE: some file paths and steps have diverged)
 8. video clips from frigate seem to be cut off too short. 
+9. Handle organizing and deleting old juggle videos, snapshots, etc. 
+10. create easy install, deploy, re-deploy, stop, uninstall script. 
