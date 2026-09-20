@@ -1,5 +1,5 @@
 # Soccer Juggle Tracker
-
+  <img src="icon.jpg" width="350">
 Computer-vision pipeline that watches a fixed camera view (a Reolink RLC-810A
 pointed at a front yard), detects and identifies known people, counts soccer
 **juggles** (keepie-uppies) per person, and tracks each person's all-time high
