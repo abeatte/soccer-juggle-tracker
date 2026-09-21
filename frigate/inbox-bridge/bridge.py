@@ -7,7 +7,6 @@ import os
 import queue
 import re
 import tempfile
-import threading
 import time
 import urllib.error
 import urllib.request
@@ -53,12 +52,10 @@ class InboxBridge:
             for value in os.environ.get("ZONE_FILTER", "").split(",")
             if value.strip()
         }
-        self.cooldown = env_int("COOLDOWN_SECONDS", 120)
         self.retries = env_int("DOWNLOAD_RETRIES", 12)
         self.retry_seconds = env_int("DOWNLOAD_RETRY_SECONDS", 5)
         self.events: queue.Queue[Event] = queue.Queue()
         self.seen: set[str] = set()
-        self.last_export: dict[str, float] = {}
 
     def on_connect(self, client, _userdata, _flags, reason_code, _properties=None) -> None:
         if getattr(reason_code, "is_failure", False):
@@ -96,11 +93,6 @@ class InboxBridge:
                 return
         if event_id in self.seen:
             return
-        now = time.monotonic()
-        if now - self.last_export.get(camera, 0) < self.cooldown:
-            LOG.info("Skipping %s event %s during %ss cooldown", camera, event_id, self.cooldown)
-            self.seen.add(event_id)
-            return
         self.seen.add(event_id)
         self.events.put(Event(event_id=event_id, camera=camera))
 
@@ -131,7 +123,6 @@ class InboxBridge:
                     raise RuntimeError("Frigate returned an empty clip")
                 os.replace(temporary, destination)
                 os.chmod(destination, 0o644)
-                self.last_export[event.camera] = time.monotonic()
                 LOG.info("Exported Frigate event %s to %s", event.event_id, destination)
                 return
             except (OSError, urllib.error.URLError, urllib.error.HTTPError, RuntimeError) as exc:
