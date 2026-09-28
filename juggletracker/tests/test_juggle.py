@@ -69,24 +69,29 @@ def test_hand_touch_resets():
     assert ended is None or ended.ended_reason in ("hand", "end")
 
 
-def test_ground_touch_resets():
-    # Ball bottoms out below the juggler's feet line -> floor touch resets.
-    ys = _bounce_y(cycles=2, peak=200.0, contact=470.0)
+def test_ground_touch_no_longer_resets_by_line():
+    # With an angled-down camera the ground line (bbox bottom + margin) doesn't
+    # correspond to the actual floor for balls in front of / behind the player.
+    # The ground_y parameter is intentionally ignored in _classify_contact now;
+    # floor contacts are handled implicitly via the lost-ball path.
+    # Verify that passing ground_y does NOT force a reset — if the contact is
+    # near a valid keypoint it should still count.
+    ys = _bounce_y(cycles=2, peak=200.0, contact=400.0)
     c = JuggleCounter(frame_height=480, smooth_window=5, min_arc_px=18,
-                      contact_radius_px=90)
+                      contact_radius_px=120)
     ball_x = 320.0
-    reasons = []
     for i, y in enumerate(ys):
-        # Feet line at 442 (bbox bottom + margin); ball bottoms at 470 >= 442.
-        ev = c.update(i, (ball_x, y), _foot_kps(ball_x, 470.0), ground_y=442.0)
-        if ev:
-            reasons.append(ev.ended_reason)
-    c.flush(len(ys))
-    # No valid juggles should accumulate when every low point is on the ground.
-    assert all(r in ("ground", "end") for r in reasons)
+        # ground_y well above the contact — old code would have reset here.
+        c.update(i, (ball_x, y), _foot_kps(ball_x, 400.0), ground_y=300.0)
+    ev = c.flush(len(ys))
+    # Should accumulate juggles instead of being reset by the ground line.
+    count = ev.count if ev else 0
+    assert count >= 1, f"valid contacts were incorrectly reset; count={count}"
 
 
-def test_lost_ball_ends_streak():
+def test_lost_ball_ends_streak_as_floor_proxy():
+    # A ball that hits the ground loses momentum and disappears; the lost-ball
+    # timer is the implicit floor-touch detector.
     ys = _bounce_y(cycles=3, contact=300.0)
     c = JuggleCounter(frame_height=480, smooth_window=5, min_arc_px=18,
                       contact_radius_px=90, lost_frames_reset=5)
@@ -94,7 +99,7 @@ def test_lost_ball_ends_streak():
     n = len(ys)
     for i, y in enumerate(ys):
         c.update(i, (ball_x, y), _foot_kps(ball_x, 300.0))
-    # Feed missing-ball frames.
+    # Feed missing-ball frames to simulate ball hitting ground and stopping.
     ended = None
     for j in range(10):
         ev = c.update(n + j, None, None)

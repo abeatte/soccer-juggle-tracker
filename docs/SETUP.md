@@ -25,9 +25,6 @@ This creates `.venv/`, installs pinned deps (CPU-only torch on Intel macOS),
 downloads YOLO weights into `models/`, and creates `inbox/ processed/ data/
 enroll_images/`.
 
-> On the 2016 Intel MacBook Pro the first model download + first InsightFace run
-> take a minute or two. Subsequent runs are cached.
-
 ## 2. Configure
 
 ```bash
@@ -39,8 +36,6 @@ Set at minimum:
 - `camera.rtsp_main` — `rtsp://USER:PASS@CAM_IP:554/h264Preview_01_main`
 - `home_assistant.mqtt_host / mqtt_user / mqtt_password`
 - `roi` — crop to the play area once you see a debug video (start full-frame)
-- `juggle.ground_y_frac` — the image-y (fraction of height) of the ground where
-  the ball rests; calibrate from a debug video
 
 `config.yaml` is gitignored (it holds credentials).
 
@@ -57,24 +52,22 @@ It checks ffmpeg, model weights, RTSP reachability, the MQTT broker, `inbox/`
 permissions, and `/dev/video0`. Resolve any ✗ FAIL items (warnings are
 non-blocking).
 
-## 3. Enroll your known people (max 4)
+## 3. Register known people
 
-Best results: a folder of 10–20 face photos per kid (varied angle/distance/light).
+Person identification is handled by the **FaceID Community integration** in
+Home Assistant. See
+[`HOME_ASSISTANT.md` — FaceID](HOME_ASSISTANT.md#faceid--async-person-identification)
+for full setup steps.
 
-```bash
-source .venv/bin/activate
-python -m juggle_tracker.cli enroll --name "Kid1" --images enroll_images/kid1
-python -m juggle_tracker.cli enroll --name "Kid2" --images enroll_images/kid2
-```
+**Short version:**
 
-Or capture live from the Mac's webcam (SPACE = grab, Q = done):
+1. Install the **Frigate FaceID** HACS integration in Home Assistant.
+2. Add each person in FaceID's HA configuration panel with 5–20 face photos.
+3. Set `home_assistant.faceid_enabled: true` in `config.yaml` and restart the
+   worker.
 
-```bash
-python -m juggle_tracker.cli enroll --name "Kid1"
-```
-
-Enrolled embeddings live in SQLite (`data/juggle.db`). The raw images in
-`enroll_images/` are gitignored — they're PII of your kids.
+> Person management happens entirely in the FaceID HA panel — there
+> is no code-level limit on the number of people you can track.
 
 ## 4. Get clips in
 
@@ -139,9 +132,10 @@ Process a real clip with `--debug-video` and watch:
 - **Overcounting jitter** → raise `juggle.min_arc_px`.
 - **Hand touches counted** → raise `juggle.contact_radius_px` accuracy by
   improving pose (larger `infer_long_edge`) or check `illegal_keypoints`.
-- **Ground touches missed/false** → recalibrate `juggle.ground_y_frac`.
-- **Wrong/Unknown person** → add more enrollment images; adjust
-  `identity.match_threshold` (lower = more lenient).
+- **Dropped ball not ending streak** → lower `juggle.lost_frames_reset`.
+- **Wrong/Unknown person** → add more face photos in FaceID's HA panel;
+  if FaceID isn't firing at all, check FaceID logs in HA. Use the HA
+  **Reassign High Score** control to manually correct misattributed sessions.
 
 ## Publishing to your private GitHub repo (later)
 

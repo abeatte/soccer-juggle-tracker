@@ -21,8 +21,16 @@ body keypoint of the juggling person:
   * valid keypoint (foot/ankle/knee/shoulder/head)  -> streak += 1
   * illegal keypoint (wrist/elbow)                   -> streak resets (hand ball)
   * nearest keypoint too far (> contact_radius_px)   -> ambiguous; ignored
-Additionally, if the ball's low point sits at/below the calibrated ground line,
-it's a floor touch -> streak resets.
+
+The ground-line check (``ground_y``) is intentionally **not used** to reset
+streaks. With a camera that looks down at an angle, the projected floor boundary
+(juggler's bounding-box bottom + margin) spans behind the player in 3-D space,
+so it sits in open air for a ball that is in front of the player.  Relying on it
+caused false resets on legitimate low kicks.  Instead, a true floor contact is
+implicitly handled: the ball loses momentum and either goes missing (triggering a
+"lost" reset after ``lost_frames_reset`` frames) or the bounce amplitude is too
+small to clear ``min_arc_px``, and won't pair with a valid body keypoint at that
+depth anyway.
 
 The machine is fed one (frame_index, ball_xy_or_None, keypoints_or_None) tuple
 per frame via :meth:`update`, and emits completed streaks (with the reason they
@@ -191,11 +199,21 @@ class JuggleCounter:
         keypoints: Optional[Keypoints],
         ground_y: Optional[float] = None,
     ) -> Optional[StreakEvent]:
-        # Ground touch — only when we have the juggler's feet this frame.
-        if ground_y is not None and contact_y >= ground_y:
-            if self._streak > 0:
-                return self._end_streak("ground", frame_index)
-            return None
+        # Ground-touch check is intentionally skipped here.
+        #
+        # With a camera looking down at an angle, the projected "ground line"
+        # (juggler bbox bottom + margin) does not correspond to the actual floor
+        # in the image for balls that are in front of or behind the player.
+        # Relying on it caused false resets on legitimate low kicks.
+        #
+        # Instead we count a juggle purely by trajectory reversal (arc bottom)
+        # coincident with proximity to an approved body keypoint.  A real floor
+        # contact is already implicitly rejected: if the ball touches the ground
+        # it either loses momentum (ball goes missing → "lost" reset) or the
+        # reversal at ground level won't pair with a valid keypoint at that y.
+        #
+        # The `ground_y` parameter is retained in the signature so callers don't
+        # break and it can be re-enabled for a different camera setup.
 
         # Use this frame's pose, or the most recent one if it's still fresh
         # (pose runs every `person_stride` frames, so contacts often land on a

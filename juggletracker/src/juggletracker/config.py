@@ -28,9 +28,6 @@ TUNABLE_PARAMS = [
     {"path": ("models", "person_conf"), "slug": "person_conf",
      "min": 0.0, "max": 1.0, "step": 0.01, "int": False,
      "name": "Person Confidence", "icon": "mdi:human"},
-    {"path": ("models", "face_conf"), "slug": "face_conf",
-     "min": 0.0, "max": 1.0, "step": 0.01, "int": False,
-     "name": "Face Confidence", "icon": "mdi:face-recognition"},
     {"path": ("processing", "infer_long_edge"), "slug": "infer_long_edge",
      "min": 320, "max": 1280, "step": 32, "int": True,
      "name": "Inference Resolution", "icon": "mdi:image-size-select-large"},
@@ -58,12 +55,6 @@ TUNABLE_PARAMS = [
     {"path": ("juggle", "max_bridge_frames"), "slug": "max_bridge_frames",
      "min": 0, "max": 30, "step": 1, "int": True,
      "name": "Ball Bridge Frames", "icon": "mdi:vector-polyline"},
-    {"path": ("identity", "match_threshold"), "slug": "match_threshold",
-     "min": 0.2, "max": 0.8, "step": 0.01, "int": False,
-     "name": "Face Match Threshold", "icon": "mdi:account-check"},
-    {"path": ("identity", "vote_min_frames"), "slug": "vote_min_frames",
-     "min": 1, "max": 10, "step": 1, "int": True,
-     "name": "Identity Vote Frames", "icon": "mdi:vote"},
     {"path": ("ball_fallback", "hough_param2"), "slug": "fallback_sensitivity",
      "min": 5, "max": 60, "step": 1, "int": False,
      "name": "Ball CV Sensitivity", "icon": "mdi:tune-variant"},
@@ -82,9 +73,6 @@ TUNABLE_PARAMS = [
     {"path": ("ball_fallback", "dp"), "slug": "fallback_dp",
      "min": 1.0, "max": 3.0, "step": 0.1, "int": False,
      "name": "Ball CV Accumulator (dp)", "icon": "mdi:grid"},
-    {"path": ("identity", "max_people"), "slug": "max_people",
-     "min": 1, "max": 10, "step": 1, "int": True,
-     "name": "Max People", "icon": "mdi:account-group"},
     {"path": ("processing", "torch_threads"), "slug": "torch_threads",
      "min": 0, "max": 16, "step": 1, "int": True,
      "name": "Torch Threads", "icon": "mdi:cpu-64-bit"},
@@ -195,7 +183,6 @@ class Config:
     capture: _Dotted = None  # type: ignore[assignment]
     processing: _Dotted = None  # type: ignore[assignment]
     models: _Dotted = None  # type: ignore[assignment]
-    identity: _Dotted = None  # type: ignore[assignment]
     juggle: _Dotted = None  # type: ignore[assignment]
     home_assistant: _Dotted = None  # type: ignore[assignment]
     database: _Dotted = None  # type: ignore[assignment]
@@ -211,7 +198,6 @@ class Config:
             "capture",
             "processing",
             "models",
-            "identity",
             "juggle",
             "home_assistant",
             "database",

@@ -56,7 +56,7 @@ python -m juggle_tracker.cli doctor
 source .venv/bin/activate
 python -m juggle_tracker.cli enroll --name "Kid1"
 python -m juggle_tracker.cli enroll --name "Kid2"
-# ...up to 4
+# ...add as many as you like
 
 # 4a. Process a single recorded clip
 python -m juggle_tracker.cli process /path/to/clip.mp4 --debug-video out.mp4

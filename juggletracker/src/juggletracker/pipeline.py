@@ -2,14 +2,13 @@
 
 For each frame:
   1. detect + track persons and the ball (every frame — the ball is fast)
-  2. every ``person_stride`` frames also run pose + face identity
+  2. every ``person_stride`` frames also run pose estimation
   3. feed (ball, keypoints of the active juggler) to the JuggleCounter
   4. persist completed streaks, update high scores, publish to Home Assistant
   5. (optional) draw a debug overlay video
 
 "One kid juggling at a time" simplifies step 3: we attribute the ball to the
-person nearest the ball, and use that person's pose + resolved identity.
-"""
+person nearest the ball, and use that person's pose."""
 from __future__ import annotations
 
 import os
@@ -28,7 +27,6 @@ from .ball_tracker import BallTracker
 from .db import Database
 from .detect import Detector, ClassicalBallDetector
 from .ha_mqtt import HAPublisher, _slug
-from .identity import (FaceEngine, Gallery, IdentityResolver, assign_face_to_track)
 from .juggle import JuggleCounter
 from .pose import PoseEstimator, person_center
 from .thermal import ThermalGuard
@@ -139,24 +137,6 @@ class Pipeline:
         self.pose = PoseEstimator(cfg.models.pose)
         # Classical fallback ball finder (used only when YOLO misses the ball).
         self.ball_fallback = ClassicalBallDetector(cfg.ball_fallback)
-        # Identity is optional — only if people are enrolled.
-        ids, names, embs = self.db.load_gallery()
-        self.has_identity = len(ids) > 0
-        self.face: Optional[FaceEngine] = None
-        self.resolver: Optional[IdentityResolver] = None
-        if self.has_identity:
-            self.face = FaceEngine(
-                pack=cfg.models.get("face_pack", "buffalo_s"),
-                det_conf=float(cfg.models.get("face_conf", 0.45)),
-            )
-            gallery = Gallery(
-                ids, names, embs,
-                threshold=float(cfg.identity.get("match_threshold", 0.42)),
-            )
-            self.resolver = IdentityResolver(
-                gallery=gallery,
-                vote_min_frames=int(cfg.identity.get("vote_min_frames", 3)),
-            )
         self.ha = HAPublisher(cfg)
         # Let the publisher signal cancellation back into a running clip when HA
         # "delete" targets the in-flight file.
@@ -175,7 +155,7 @@ class Pipeline:
         self._cur_pct: Optional[float] = None
         # Reflect persisted timing stats in HA immediately on startup.
         self.ha.publish_timing(*self.db.process_time_stats())
-        # Announce every profile (enrolled + the Unknown catch-all) up front so
+        # Announce every profile (people + the Unknown catch-all) up front so
         # their sensors exist right after a service restart, not only after the
         # next clip. Retained + idempotent.
         self.ha.sync_all(self.db.list_people())
@@ -205,6 +185,33 @@ class Pipeline:
             return True
         return False
 
+    def is_event_queued(self, event_id: str) -> bool:
+        """Return True if a clip for *event_id* is currently in-flight or sitting
+        in the inbox directory waiting to be processed.
+
+        Used by the FaceID MQTT handler to decide whether to park a pending
+        attribution (clip will be processed soon) or drop it (nothing will ever
+        consume it).  Clip filenames follow the Frigate inbox-bridge convention:
+        ``clip_{camera}_{event_id}.mp4``."""
+        if not event_id:
+            return False
+        # Check the clip currently being processed.
+        cur = self._cur_clip
+        if cur:
+            basename = os.path.splitext(os.path.basename(cur))[0]
+            parts = basename.split("_", 2)
+            if len(parts) == 3 and parts[2] == event_id:
+                return True
+        # Check the inbox directory for a queued clip.
+        inbox = self.cfg.capture.get("inbox_dir")
+        if inbox and os.path.isdir(inbox):
+            for fname in os.listdir(inbox):
+                stem = os.path.splitext(fname)[0]
+                parts = stem.split("_", 2)
+                if len(parts) == 3 and parts[2] == event_id:
+                    return True
+        return False
+
     def process(self, clip_path: str, debug_video: Optional[str] = None,
                 trace_sink=None) -> ClipResult:
         src = FrameSource(
@@ -213,7 +220,14 @@ class Pipeline:
             infer_long_edge=int(self.cfg.processing.get("infer_long_edge", 960)),
         )
         stride = max(1, int(self.cfg.processing.get("person_stride", 3)))
-        session_id = self.db.start_session(clip_path, src.fps)
+        # Extract the Frigate event ID from the clip filename so the session can
+        # be looked up later when FaceID fires a sub_label re-attribution event.
+        # Filename format: clip_{camera}_{event_id}.mp4 (from the inbox bridge).
+        _basename = os.path.splitext(os.path.basename(clip_path))[0]
+        _parts = _basename.split("_", 2)  # ["clip", camera, event_id]
+        _frigate_event_id = _parts[2] if len(_parts) == 3 else None
+        session_id = self.db.start_session(clip_path, src.fps,
+                                           frigate_event_id=_frigate_event_id)
         t0 = time.perf_counter()
 
         writer = None
@@ -276,16 +290,10 @@ class Pipeline:
                 ball_det = self.ball_fallback.detect(img, ball_tracker.last_xy)
             ball_xy, ball_bridged = ball_tracker.update(frame.index, ball_det)
 
-            # Pose + identity on stride frames.
+            # Pose estimation on stride frames.
             if frame.index % stride == 0 and det.persons:
                 poses = self.pose.estimate(img)
                 last_poses = _match_pose_to_track(poses, det.persons)
-                if self.has_identity and self.face is not None:
-                    for emb, fc in self.face.embeddings(img):
-                        pid, _ = self.resolver.gallery.match(emb)
-                        tid = assign_face_to_track(fc, det.persons)
-                        if tid is not None:
-                            self.resolver.observe(tid, pid)
 
             # Attribute the ball to the nearest person (one-kid scenario).
             active = _nearest_person_to_ball(det.persons, ball_xy)
@@ -329,6 +337,50 @@ class Pipeline:
         # so the sensor attributes carry the fresh video URL.
         if new_highs:
             self._capture_highscore_videos(clip_path, new_highs)
+
+        # Apply any FaceID attribution that arrived before we finished writing
+        # attempts (the early-arrival race condition).  If FaceID fired while
+        # the clip was still being processed, _on_faceid_event stored the name
+        # in _pending_faceid instead of dropping it.  We apply it now, after all
+        # attempts are committed, so sync_all() below publishes the correct
+        # person's scores rather than Unknown Juggler.
+        if _frigate_event_id:
+            pending_name = self.ha.consume_pending_faceid(_frigate_event_id)
+            if pending_name is not None:
+                try:
+                    result = self.db.reassign_session_by_event(
+                        _frigate_event_id, pending_name
+                    )
+                    if result is not None:
+                        print(
+                            f"  [faceid] applied early attribution: "
+                            f"{result['moved_count']} attempt(s) "
+                            f"(best: {result['best_count']}) -> '{pending_name}' "
+                            f"[session {result['session_id']}]",
+                            flush=True,
+                        )
+                        # Refresh new_highs: if the moved best beats the person's
+                        # existing record a new-high-score event should fire.
+                        if result.get("new_high"):
+                            new_highs.append({
+                                "person": pending_name,
+                                "score": result["best_count"],
+                                "pid": self.db.add_person(pending_name),
+                            })
+                            # Re-save the high-score replay under the correct name.
+                            self._capture_highscore_videos(clip_path, new_highs[-1:])
+                    else:
+                        print(
+                            f"  [faceid] pending attribution for event "
+                            f"{_frigate_event_id} found no Unknown attempts to move",
+                            flush=True,
+                        )
+                except Exception as exc:
+                    print(
+                        f"  [faceid] early-attribution apply failed for event "
+                        f"{_frigate_event_id}: {exc}",
+                        flush=True,
+                    )
 
         # Publish to Home Assistant.
         self.ha.sync_all(self.db.list_people())
@@ -385,11 +437,9 @@ class Pipeline:
     def _record(self, session_id, track_id, event, streaks, new_highs) -> None:
         """Attribute a completed streak to a person, persist it, and collect it
         for HA publishing. Called from process() when a streak ends."""
-        pid = self.resolver.resolve(track_id) if self.resolver else None
-        if pid is None:
-            # Couldn't attribute to an enrolled kid -> the catch-all profile,
-            # so unattributed juggles still accrue a score/high-score/video.
-            pid = self.db.unknown_person_id
+        # All streaks are attributed to the Unknown Juggler catch-all profile
+        # unless re-attributed via MQTT later.
+        pid = self.db.unknown_person_id
         is_high = self.db.record_attempt(
             session_id, pid, track_id, event.count, event.ended_reason
         )

@@ -1,6 +1,5 @@
 """Command-line interface.
 
-    python -m juggletracker.cli enroll  --name "Kid1"   [--images DIR | --webcam]
     python -m juggletracker.cli process CLIP.mp4        [--debug-video out.mp4]
     python -m juggletracker.cli watch                    # batch worker: watch inbox
     python -m juggletracker.cli scores                   # print the scoreboard
@@ -19,74 +18,6 @@ import sys
 import time
 
 from .config import load_config
-
-
-def _enroll(args) -> int:
-    import cv2
-    from .db import Database, UNKNOWN_NAME
-    from .identity import FaceEngine
-
-    cfg = load_config(args.config)
-    db = Database(cfg.database.path)
-
-    # The reserved catch-all profile is not an enrolled person and must not
-    # count against the max_people cap.
-    people = [p for p in db.list_people() if p["name"] != UNKNOWN_NAME]
-    if len(people) >= int(cfg.identity.get("max_people", 4)) and \
-            args.name not in [p["name"] for p in people]:
-        print(f"Max people ({cfg.identity.get('max_people')}) reached.", file=sys.stderr)
-        return 1
-
-    face = FaceEngine(pack=cfg.models.get("face_pack", "buffalo_s"))
-    pid = db.add_person(args.name)
-    added = 0
-
-    if args.images:
-        paths = []
-        for ext in ("*.jpg", "*.jpeg", "*.png"):
-            paths += glob.glob(os.path.join(args.images, ext))
-        for p in sorted(paths):
-            img = cv2.imread(p)
-            if img is None:
-                continue
-            emb = face.best_single(img)
-            if emb is not None:
-                db.add_embedding(pid, emb)
-                added += 1
-        print(f"Enrolled {args.name}: {added} embeddings from {len(paths)} images.")
-    else:
-        # Webcam capture: press SPACE to grab a shot, Q to finish.
-        cap = cv2.VideoCapture(args.webcam_index)
-        if not cap.isOpened():
-            print("Cannot open webcam. Use --images DIR instead.", file=sys.stderr)
-            return 1
-        print("Webcam enrollment: SPACE = capture, Q = quit. Aim for 10-20 shots, "
-              "varied angles/distances.")
-        while True:
-            ok, frame = cap.read()
-            if not ok:
-                break
-            disp = frame.copy()
-            cv2.putText(disp, f"{args.name}: {added} shots (SPACE=grab Q=quit)",
-                        (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-            cv2.imshow("enroll", disp)
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord(" "):
-                emb = face.best_single(frame)
-                if emb is not None:
-                    db.add_embedding(pid, emb)
-                    added += 1
-                    print(f"  captured ({added})")
-                else:
-                    print("  no face found, try again")
-            elif key in (ord("q"), 27):
-                break
-        cap.release()
-        cv2.destroyAllWindows()
-        print(f"Enrolled {args.name}: {added} embeddings.")
-
-    db.close()
-    return 0 if added > 0 else 2
 
 
 def _process(args) -> int:
@@ -204,7 +135,7 @@ def _scores(args) -> int:
     db = Database(cfg.database.path)
     rows = db.list_people()
     if not rows:
-        print("No people enrolled yet. Run: enroll --name \"Kid1\"")
+        print("No people in the database yet.")
         return 0
     print(f"{'Rank':<5}{'Name':<16}{'High Score':>10}")
     print("-" * 31)
@@ -527,11 +458,6 @@ def _c_highscore(cfg):
     return _PASS, f"{d} writable ({'annotated H.264' if annotate else 'raw clip'})"
 
 
-def _c_webcam():
-    if os.path.exists("/dev/video0"):
-        return _PASS, "/dev/video0 present (live enrollment available)"
-    return _WARN, "/dev/video0 absent — enroll with --images DIR instead"
-
 
 def _doctor(args) -> int:
     cfg = load_config(args.config)
@@ -543,7 +469,6 @@ def _doctor(args) -> int:
         ("home assistant (MQTT)", _c_mqtt(cfg)),
         ("inbox dir", _c_inbox(cfg)),
         ("highscore dir", _c_highscore(cfg)),
-        ("webcam", _c_webcam()),
     ]
     print("Juggle Tracker preflight\n" + "=" * 60)
     worst_fail = False
@@ -562,12 +487,6 @@ def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="juggletracker", description=__doc__)
     p.add_argument("--config", default=None, help="Path to config.yaml")
     sub = p.add_subparsers(dest="cmd", required=True)
-
-    pe = sub.add_parser("enroll", help="Enroll a known person's face")
-    pe.add_argument("--name", required=True)
-    pe.add_argument("--images", help="Directory of face images (instead of webcam)")
-    pe.add_argument("--webcam-index", type=int, default=0)
-    pe.set_defaults(func=_enroll)
 
     pp = sub.add_parser("process", help="Process a single clip")
     pp.add_argument("clip")
@@ -591,7 +510,7 @@ def main(argv=None) -> int:
     pr.add_argument("--seconds", type=int, default=0)
     pr.set_defaults(func=_record)
 
-    pd = sub.add_parser("doctor", help="Preflight: check ffmpeg, RTSP, MQTT, models, webcam")
+    pd = sub.add_parser("doctor", help="Preflight: check ffmpeg, RTSP, MQTT, models, inbox")
     pd.set_defaults(func=_doctor)
 
     pb = sub.add_parser("bench", help="Benchmark model FPS + estimate per-clip time")

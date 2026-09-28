@@ -22,10 +22,13 @@ capture:
   clip_seconds: 60       # length of a motion-triggered clip (short = faster turnaround)
   inbox_dir: "/srv/juggle_inbox"     # new clips land here (from HA/Reolink or manual copy)
   processed_dir: "/srv/juggle_processed"   # clips are moved here after analysis
+  # failed_dir: "/srv/juggle_failed"  # clips that error during processing (default: processed_dir/failed/)
   highscore_dir: "/srv/juggle_highscores"
   save_highscore_video: true
   annotate_highscore: true
   processed_retention_days: 14 # 0 = keep forever (default)
+  reprocess_annotate_default: true  # default "annotate" toggle when reprocessing via HA
+  reprocess_thumbnail_seconds: 2.0   # seek offset (s) for the reprocess thumbnail preview
 
 # Region of interest in the frame, as fractions [0-1]: x0,y0,x1,y1.
 # Crop to just the play area to cut CPU cost and false detections.
@@ -57,19 +60,9 @@ models:
   # or after moving to AVX2+ hardware. See docs/DEPLOY.md.
   detector: "models/yolo11n.pt"        # person + sports ball (COCO)
   pose: "models/yolo11n-pose.pt"       # 17-keypoint pose
-  # InsightFace model pack for face embeddings (auto-downloaded on first use).
-  face_pack: "buffalo_s"               # 's' = small/fast, good for CPU
   # Detection confidence thresholds
   person_conf: 0.35
   ball_conf: 0.10                      # ball is small/blurry — keep this low
-  face_conf: 0.45
-
-identity:
-  # Cosine-similarity threshold for accepting a face match against enrolled people.
-  match_threshold: 0.42
-  # Frames a face must be seen and agree before locking a track to a person.
-  vote_min_frames: 3
-  max_people: 4
 
 juggle:
   # Trajectory smoothing window (frames) for the ball y-signal.
@@ -80,21 +73,29 @@ juggle:
   min_arc_px: 18
   # Max px distance from ball-at-contact to a body keypoint to attribute the touch.
   contact_radius_px: 110 # was 90
+  # How far below the juggler's tracked bounding-box bottom to treat as "ground".
+  # A ball contact below this line resets the streak.
+  ground_margin_px: 40
+  # Minimum frames between two counted contacts (debounce fast double-taps).
+  min_contact_gap_frames: 6
+  # Frames of ball absence before the streak resets (ball left the frame/occluded).
+  lost_frames_reset: 15
+  # Frames before stale keypoints are discarded (pose not re-run on non-stride frames).
+  kp_staleness_frames: 6
   # Keypoints that make a juggle VALID (COCO-17 names).
   valid_keypoints: [left_shoulder, right_shoulder, left_knee, right_knee,
                     left_ankle, right_ankle, nose, left_eye, right_eye]
   # Keypoints that make a touch ILLEGAL (hands/arms) → reset streak.
   illegal_keypoints: [left_wrist, right_wrist, left_elbow, right_elbow]
-  # Ground plane: image-y (fraction of frame height) at/below which a ball low
-  # point counts as a FLOOR touch → reset. Calibrate to your yard. 1.0 disables.
-  ground_y_frac: 0.82
 
 ball_fallback:
-  enabled: true       # off by default
+  enabled: true
   min_radius: 4
   max_radius: 40
   search_radius: 140
-  hough_param2: 18    # lower = more (looser) circles
+  hough_param2: 18    # lower = more (looser) circles; tune this first
+  hough_param1: 100   # Canny high threshold fed to HoughCircles
+  dp: 1.2             # inverse accumulator resolution (1.0 = full res, higher = faster)
   # optional color gate for a known ball color:
   # hsv_lower: [0, 0, 180]   # e.g. white ball
   # hsv_upper: [180, 60, 255]
@@ -108,6 +109,11 @@ home_assistant:
   discovery_prefix: "homeassistant"   # HA MQTT discovery topic root
   node_id: "juggle_tracker"
   media_base_url: "http://<HA_IP>:8123/local/juggle"
+  faceid_enabled: true  # subscribe to Frigate sub_label events for async person attribution
+
+calibration:
+  enabled: true                              # expose live-tuning controls in Home Assistant
+  service_name: "juggle-tracker.service"     # systemd unit name (used by the HA restart button)
 
 database:
   path: "data/juggle.db"

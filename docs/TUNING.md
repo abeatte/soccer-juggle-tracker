@@ -36,7 +36,7 @@ Open `out.mp4`. The overlay shows: person boxes + track IDs, the ball circle,
 pose keypoints (magenta dots), and the live `streak:` counter. **Watch what the
 machine sees** — this is your primary tuning instrument.
 
-### Step 3 — Fix the four things, in order
+### Step 3 — Fix the three things, in order
 
 1. **Is the ball detected on (almost) every frame?**
    Look for the orange ball circle. If it flickers/disappears, especially at the
@@ -51,15 +51,7 @@ machine sees** — this is your primary tuning instrument.
    Set `roi: [x0, y0, x1, y1]` as fractions `0–1`. Re-run and confirm the kid +
    full ball arc stay inside the crop at all times.
 
-3. **Calibrate the ground line.**
-   Find the image-y where the ball would rest on the grass. Estimate it as a
-   fraction of frame height (top = 0.0, bottom = 1.0) and set
-   `juggle.ground_y_frac`. Contacts at/below this line are treated as floor
-   touches and reset the streak. If real juggles are being reset as "ground",
-   the line is too high (increase the value toward 1.0). If dropped balls aren't
-   ending the streak, it's too low.
-
-4. **Sanity-check contacts vs pose.**
+3. **Sanity-check contacts vs pose.**
    Watch the `streak:` counter tick up. If it:
    - **overcounts** small oscillations → raise `juggle.min_arc_px` (e.g. `25–30`)
    - **counts hand catches** → confirm `illegal_keypoints` includes wrists/elbows
@@ -70,8 +62,6 @@ machine sees** — this is your primary tuning instrument.
      relevant keypoint to `valid_keypoints`.
 
 ### Step 4 — Re-run after each change
-Change **one** knob at a time and re-process the same clip. Converging on good
-settings usually takes 4–8 passes on the first clip.
 
 ### Symptom → knob quick reference
 
@@ -82,9 +72,7 @@ settings usually takes 4–8 passes on the first clip.
 | Jitter counted as juggles | `juggle.min_arc_px` | ↑ raise |
 | Hand/catch counted | `juggle.contact_radius_px` | ↓ lower |
 | Real touches missed | `juggle.contact_radius_px` | ↑ raise |
-| Valid juggles reset as "ground" | `juggle.ground_y_frac` | ↑ toward 1.0 |
-| Dropped ball not ending streak | `juggle.ground_y_frac` | ↓ lower |
-| Wrong/"Unknown" person | more enroll images; `identity.match_threshold` | ↓ lower = more lenient |
+| Dropped ball not ending streak | `juggle.lost_frames_reset` | ↓ lower |
 | Analysis too slow | `infer_long_edge` ↓, `person_stride` ↑, tighter `roi` | — |
 
 ---

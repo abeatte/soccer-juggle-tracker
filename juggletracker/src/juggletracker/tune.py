@@ -110,26 +110,25 @@ def discover_clips(source: str, truth_csv: str | None):
 
 
 # --- parameter search space -------------------------------------------------
-# Parameters that actually move the juggle *count*. Identity/face params are
-# excluded (no enrollment happens in the sandbox, so they cannot affect counts).
+# Parameters that actually move the juggle *count*.
 QUICK_PARAMS = [
     "person_stride", "contact_radius_px", "min_arc_px", "ground_margin_px",
     "smooth_window", "lost_frames_reset", "max_bridge_frames", "ball_conf",
 ]
 # 'full' adds the remaining count-relevant knobs (resolution + person conf +
-# classical-fallback tuning). Still excludes face/identity params.
+# classical-fallback tuning).
 FULL_EXTRA = [
     "person_conf", "infer_long_edge",
     "fallback_sensitivity", "fallback_max_radius", "fallback_search_radius",
 ]
-EXCLUDE_ALWAYS = {"face_conf", "match_threshold", "vote_min_frames"}
+EXCLUDE_ALWAYS: set[str] = set()
 
 # Top-level config sections whose values are read in Pipeline.__init__ (model
 # construction) and therefore require rebuilding the Pipeline when they change.
 # Everything else (juggle.*, processing.*) is re-read every process() call, so
 # we can mutate it in place and reuse the loaded models — the whole reason the
 # tuner is tractable on this hardware.
-_REBUILD_SECTIONS = {"models", "ball_fallback", "identity"}
+_REBUILD_SECTIONS = {"models", "ball_fallback"}
 
 
 def _candidate_values(spec: dict, current, max_candidates: int = 7):

@@ -271,17 +271,13 @@ sit in the device's *Configuration* section):
 |---|---|
 | Juggle Ball Confidence | `models.ball_conf` |
 | Juggle Person Confidence | `models.person_conf` |
-| Juggle Face Confidence | `models.face_conf` |
 | Juggle Inference Resolution | `processing.infer_long_edge` |
 | Juggle Person/Pose Stride | `processing.person_stride` |
 | Juggle Contact Radius (px) | `juggle.contact_radius_px` |
 | Juggle Min Arc Height (px) | `juggle.min_arc_px` |
-| Juggle Ground Line (frac) | `juggle.ground_y_frac` |
 | Juggle Smoothing Window | `juggle.smooth_window` |
 | Juggle Lost-Ball Frames | `juggle.lost_frames_reset` |
 | Juggle Ball Bridge Frames | `juggle.max_bridge_frames` |
-| Juggle Face Match Threshold | `identity.match_threshold` |
-| Juggle Identity Vote Frames | `identity.vote_min_frames` |
 | Juggle Ball CV Sensitivity | `ball_fallback.hough_param2` (lower = more circles) |
 | Juggle Ball CV Max Radius | `ball_fallback.max_radius` |
 | Juggle Ball CV Search Radius | `ball_fallback.search_radius` |
@@ -466,6 +462,131 @@ mode: queued
 > Because this is **batch** processing, the announcement fires a few minutes
 > after the session ends (when the clip finishes processing), not the instant the
 > record is set.
+
+## FaceID — async person identification
+
+The juggle tracker no longer runs InsightFace in-process. Instead, it buckets
+every session to **Unknown Juggler** immediately after processing, then listens
+for Frigate's [FaceID Community integration](https://github.com/SkyTechNerds/faceid)
+to publish a `sub_label` over MQTT. When that arrives, the worker re-attributes
+the session's attempts to the named person and republishes scores.
+
+This frees the juggle worker from loading ~300 MB of face-model weights on the
+already-constrained CPU, and lets FaceID handle person management through the HA
+UI instead of the CLI `enroll` command.
+
+### Step 1 — install FaceID in Home Assistant
+
+1. Open HA → **HACS** → **Integrations** → search `FaceID` → install
+   **Frigate FaceID** (by SkyTechNerds).
+2. Restart Home Assistant.
+3. Go to **Settings → Devices & Services → Add Integration** → search `FaceID`
+   → follow the setup flow. You'll need your Frigate URL (e.g.
+   `http://frigate:5000`) and the same MQTT broker the juggle tracker uses.
+
+### Step 2 — enroll known people in FaceID
+
+In FaceID's HA configuration panel, add each person you want to track:
+
+1. **Settings → Devices & Services → FaceID → Configure**.
+2. Add a person (name must match exactly how you want it to appear in juggle
+   scores — e.g. `Kid1`, `Artie`). The name is case-sensitive.
+3. Upload 5–20 face photos for each person (varied angles, outdoor lighting).
+   More photos from different angles = better recognition at yard distance.
+4. FaceID will start labelling Frigate person events with `sub_label` as soon as
+   it recognises a face in the event snapshot.
+
+> FaceID uses a single snapshot per Frigate event (the "best" frame Frigate
+> selected). If the kid is running away or facing away at that moment, FaceID
+> won't fire a label. Sessions where it doesn't fire stay as Unknown Juggler —
+> use the **Reassign High Score** control in the tracker dashboard to fix those
+> manually.
+
+### Step 3 — enable FaceID listening in the juggle tracker
+
+In `juggletracker/config.yaml`:
+
+```yaml
+home_assistant:
+  faceid_enabled: true
+```
+
+Then restart the worker:
+
+```bash
+systemctl --user restart juggle-tracker.service
+```
+
+Confirm in the logs:
+
+```bash
+journalctl --user -u juggle-tracker.service -n 20
+# Should contain:
+#   [faceid] subscribed to frigate/+/person/+ sub_label events
+```
+
+### Step 4 — verify end-to-end
+
+The easiest way to confirm the plumbing works **without waiting for FaceID** is
+to publish a synthetic `sub_label` manually.
+
+First, find a real Frigate event ID that the tracker has already processed:
+
+```bash
+sqlite3 ~/path/to/data/juggle.db \
+  "SELECT frigate_event_id, clip_path FROM sessions ORDER BY id DESC LIMIT 5;"
+```
+
+Then publish a fake recognition:
+
+```bash
+mosquitto_pub -h localhost -u <mqtt_user> -P <mqtt_password> \
+  -t "frigate/back_yard/person/<event_id_from_above>" \
+  -m '{"sub_label": "Kid1", "score": 0.91}'
+```
+
+Watch the tracker log:
+
+```bash
+journalctl --user -u juggle-tracker.service -f
+# Should show:
+#   [faceid] event <id> identified as 'Kid1'
+#   [faceid] re-attributed 2 attempt(s) (best: 7) to 'Kid1' [session 42]
+```
+
+And verify that `sensor.kid1_juggle_high_score` updates in HA within a few
+seconds.
+
+### What happens if FaceID doesn't fire
+
+Sessions stay attributed to **Unknown Juggler** — the score still accrues there,
+a replay video is still saved, and you can always correct it manually using the
+**Reassign High Score** dashboard control (source: Unknown Juggler → target: Kid1
+→ press Reassign). This is the same manual path that existed before.
+
+### MQTT topic format (FaceID publishes)
+
+```
+frigate/<camera_name>/person/<event_id>
+```
+
+Payload (JSON):
+```json
+{"sub_label": "Kid1", "score": 0.87, "camera": "back_yard", "id": "<event_id>"}
+```
+
+The juggle worker uses `sub_label` and extracts `<event_id>` from the topic. The
+`score` field is logged but not used as a confidence threshold (FaceID's own
+confidence filtering is configured inside FaceID).
+
+### Note on the hardware constraint
+
+Frigate's built-in `face_recognition` feature (not FaceID) requires **AVX2**,
+which the i7-3740QM (Ivy Bridge) does not have. FaceID is a separate HACS
+integration that runs its own face-recognition model inside the HA container —
+it does **not** use Frigate's native face recognition feature, so the AVX2
+constraint does not apply to it. Enable it in `frigate/config/config.yaml` as
+shown and it will work on this hardware.
 ## Frigate exports clips into the shared `inbox/`
 
 The batch worker processes whatever lands in its `inbox/`. The Frigate inbox

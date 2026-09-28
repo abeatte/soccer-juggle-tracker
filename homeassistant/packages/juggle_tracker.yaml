@@ -95,3 +95,120 @@ template:
 #             {%- for k in kids %}{{ k.attributes.friendly_name | replace(' Juggle High Score','') }}: {{ k.state }}{{ '\n' if not loop.last }}{% endfor %}
 #             {% endif %}
 #     mode: single
+
+
+# ---------------------------------------------------------------------------
+# FaceID async re-attribution
+# ---------------------------------------------------------------------------
+# When FaceID (HACS) is installed and configured, Frigate publishes a
+# sub_label to  frigate/<camera>/person/<event_id>  whenever it recognises
+# someone. The juggle worker's MQTT listener picks this up and re-attributes
+# any "Unknown Juggler" attempts from that session to the named person.
+#
+# SETUP STEPS:
+#   1. Install the FaceID integration from HACS in Home Assistant.
+#   2. Enrol face photos for each person inside the FaceID UI
+#      (HA → Settings → Devices & Services → FaceID).
+#   3. In juggletracker/config.yaml set:
+#        home_assistant:
+#          faceid_enabled: true
+#   4. Restart the juggle-tracker systemd service.
+#   5. Confirm the log shows:
+#        [faceid] subscribed to frigate/+/person/+ sub_label events
+#
+# TESTING WITHOUT FULL FACEID:
+#   Publish a synthetic sub_label manually from Mosquitto to confirm the
+#   re-attribution plumbing works end-to-end:
+#     mosquitto_pub -h localhost -u <user> -P <pw> \
+#       -t "frigate/back_yard/person/<event_id>" \
+#       -m '{"sub_label": "Kid1", "score": 0.91}'
+#   Replace <event_id> with a real ID visible in juggle.db sessions table:
+#     sqlite3 data/juggle.db "SELECT frigate_event_id, clip_path FROM sessions ORDER BY id DESC LIMIT 5;"
+#
+# SENSOR: monitor the last FaceID re-attribution result published by the worker.
+# The worker logs re-attributions to its stdout; this sensor surfaces the last
+# event via a retained MQTT message the worker publishes (see NOTE below).
+#
+# NOTE: the worker does not currently publish a dedicated faceid topic — the
+# re-attribution result is visible via sensor.juggle_last_session (the session
+# sensor updates after sync_all is called). The stub below is a placeholder for
+# a future explicit faceid_event topic. Uncomment and adjust when added.
+#
+# mqtt:
+#   sensor:
+#     - name: "Juggle FaceID Last Attribution"
+#       unique_id: juggle_faceid_last_attribution
+#       state_topic: "juggle_tracker/event/faceid_attribution"
+#       value_template: "{{ value_json.person }}"
+#       json_attributes_topic: "juggle_tracker/event/faceid_attribution"
+#       icon: mdi:face-recognition
+#       device:
+#         identifiers: ["juggle_tracker"]
+#         name: "Soccer Juggle Tracker"
+
+# automation:
+#   # 3) Announce when FaceID re-attributes an Unknown session to a known person.
+#   #    Fires after the juggle worker receives the sub_label and re-publishes scores.
+#   #    Trigger: the new_high_score event (re-attribution only fires this when the
+#   #    re-attributed score beats the person's previous record).
+#   - id: juggle_faceid_reattribution_announce
+#     alias: "Juggle: announce FaceID re-attribution high score"
+#     trigger:
+#       - platform: mqtt
+#         topic: "juggle_tracker/event/new_high_score"
+#     variables:
+#       person: "{{ trigger.payload_json.person }}"
+#       score:  "{{ trigger.payload_json.score }}"
+#     condition:
+#       # Only fire if this was a meaningful score, not a 0-juggle attribution.
+#       - condition: template
+#         value_template: "{{ score | int > 0 }}"
+#     action:
+#       - service: notify.mobile_app_phone   # CHANGE_ME
+#         data:
+#           title: "⚽ Juggle re-attributed!"
+#           message: >-
+#             FaceID identified {{ person }} — {{ score }} juggles credited!
+#     mode: queued
+
+#   # 1) Announce a new personal record (fires a few minutes after the session,
+#   #    since processing is batch/offline).
+#   - id: juggle_new_high_score_announce
+#     alias: "Juggle: announce new high score"
+#     trigger:
+#       - platform: mqtt
+#         topic: "juggle_tracker/event/new_high_score"
+#     variables:
+#       person: "{{ trigger.payload_json.person }}"
+#       score: "{{ trigger.payload_json.score }}"
+#     action:
+#       # Speak it (swap for your TTS engine / speaker).
+#       - service: tts.google_translate_say   # CHANGE_ME
+#         data:
+#           entity_id: media_player.kitchen_speaker   # CHANGE_ME
+#           message: "New juggling record! {{ person }} just hit {{ score }} juggles."
+#       # And push a phone notification.
+#       - service: notify.mobile_app_phone   # CHANGE_ME
+#         data:
+#           title: "⚽ New juggle record!"
+#           message: "{{ person }} set a new personal best: {{ score }} juggles."
+#     mode: queued
+#
+#   # 2) Optional: nightly leaderboard summary notification.
+#   - id: juggle_nightly_leaderboard
+#     alias: "Juggle: nightly leaderboard"
+#     trigger:
+#       - platform: time
+#         at: "20:30:00"
+#     action:
+#       - service: notify.mobile_app_phone   # CHANGE_ME
+#         data:
+#           title: "⚽ Juggle leaderboard"
+#           message: >-
+#             {% set kids = states.sensor
+#                | selectattr('entity_id','search','_juggle_high_score')
+#                | sort(attribute='state', reverse=true) | list %}
+#             {% if kids | length == 0 %}No scores yet.{% else %}
+#             {%- for k in kids %}{{ k.attributes.friendly_name | replace(' Juggle High Score','') }}: {{ k.state }}{{ '\n' if not loop.last }}{% endfor %}
+#             {% endif %}
+#     mode: single

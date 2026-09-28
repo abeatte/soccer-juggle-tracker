@@ -1,9 +1,8 @@
-"""SQLite persistence: people, face embeddings, sessions, and high scores.
+"""SQLite persistence: people, sessions, and high scores.
 
 Schema
 ------
 people        : one row per enrolled person (name + all-time high score)
-face_embeds   : one row per enrolled face embedding (multiple per person)
 sessions      : one row per processed clip
 attempts      : one row per juggle streak within a session (per person)
 
@@ -18,11 +17,8 @@ import sqlite3
 import time
 from typing import Iterable, Optional
 
-import numpy as np
-
-# Reserved profile that catches every juggle session we can't attribute to an
-# enrolled person. It's a normal `people` row but has NO face embeddings, so it
-# can never be a match target — it only ever receives the `pid is None` fallback.
+# Reserved profile that catches every juggle session we can't attribute to a
+# named person. All streaks default here unless re-attributed via MQTT.
 UNKNOWN_NAME = "Unknown Juggler"
 
 _SCHEMA = """
@@ -32,19 +28,14 @@ CREATE TABLE IF NOT EXISTS people (
     high_score  INTEGER NOT NULL DEFAULT 0,
     created_at  REAL NOT NULL
 );
-CREATE TABLE IF NOT EXISTS face_embeds (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    person_id   INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
-    embedding   BLOB NOT NULL,          -- float32 numpy bytes
-    created_at  REAL NOT NULL
-);
 CREATE TABLE IF NOT EXISTS sessions (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    clip_path   TEXT NOT NULL,
-    started_at  REAL NOT NULL,
-    frames      INTEGER NOT NULL DEFAULT 0,
-    fps         REAL NOT NULL DEFAULT 0,
-    duration_s  REAL NOT NULL DEFAULT 0
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    clip_path        TEXT NOT NULL,
+    started_at       REAL NOT NULL,
+    frames           INTEGER NOT NULL DEFAULT 0,
+    fps              REAL NOT NULL DEFAULT 0,
+    duration_s       REAL NOT NULL DEFAULT 0,
+    frigate_event_id TEXT             -- Frigate event ID for async FaceID re-attribution
 );
 CREATE TABLE IF NOT EXISTS attempts (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -67,14 +58,16 @@ class Database:
         self.conn.executescript(_SCHEMA)
         # Migrate older DBs that predate the duration_s column.
         self._ensure_column("sessions", "duration_s", "REAL NOT NULL DEFAULT 0")
+        # Migrate older DBs that predate FaceID async re-attribution.
+        self._ensure_column("sessions", "frigate_event_id", "TEXT")
         # High-score replay clip: path to the most-recent high-score video for
         # this person, and when it was captured (epoch). Overwritten in place
         # whenever the record is beaten, so only the latest is ever kept.
         self._ensure_column("people", "high_clip", "TEXT")
         self._ensure_column("people", "high_clip_at", "REAL")
         self.conn.commit()
-        # Guarantee the catch-all profile exists so it shows alongside enrolled
-        # kids. It has no embeddings, so the face gallery ignores it.
+        # Guarantee the catch-all profile exists so it shows alongside other
+        # people in the database and HA sensors.
         self.unknown_person_id = self.add_person(UNKNOWN_NAME)
 
     def _ensure_column(self, table: str, col: str, decl: str) -> None:
@@ -96,29 +89,6 @@ class Database:
             "SELECT id FROM people WHERE name = ?", (name,)
         ).fetchone()
         return int(row["id"])
-
-    def add_embedding(self, person_id: int, embedding: np.ndarray) -> None:
-        emb = np.asarray(embedding, dtype=np.float32).tobytes()
-        self.conn.execute(
-            "INSERT INTO face_embeds(person_id, embedding, created_at) VALUES (?, ?, ?)",
-            (person_id, emb, time.time()),
-        )
-        self.conn.commit()
-
-    def load_gallery(self) -> tuple[list[int], list[str], np.ndarray]:
-        """Return (person_ids, names, embeddings[N,D]) for all enrolled faces."""
-        rows = self.conn.execute(
-            "SELECT fe.person_id, p.name, fe.embedding "
-            "FROM face_embeds fe JOIN people p ON p.id = fe.person_id"
-        ).fetchall()
-        if not rows:
-            return [], [], np.zeros((0, 512), dtype=np.float32)
-        ids = [int(r["person_id"]) for r in rows]
-        names = [str(r["name"]) for r in rows]
-        embs = np.stack(
-            [np.frombuffer(r["embedding"], dtype=np.float32) for r in rows]
-        )
-        return ids, names, embs
 
     def list_people(self) -> list[sqlite3.Row]:
         return self.conn.execute(
@@ -166,13 +136,98 @@ class Database:
         return reassigned, high
 
     # ---- sessions / attempts -------------------------------------------
-    def start_session(self, clip_path: str, fps: float) -> int:
+    def start_session(self, clip_path: str, fps: float,
+                      frigate_event_id: Optional[str] = None) -> int:
         cur = self.conn.execute(
-            "INSERT INTO sessions(clip_path, started_at, fps) VALUES (?, ?, ?)",
-            (clip_path, time.time(), fps),
+            "INSERT INTO sessions(clip_path, started_at, fps, frigate_event_id) "
+            "VALUES (?, ?, ?, ?)",
+            (clip_path, time.time(), fps, frigate_event_id),
         )
         self.conn.commit()
         return int(cur.lastrowid)
+
+    def lookup_session_by_event_id(self, frigate_event_id: str) -> Optional[int]:
+        """Return the session_id for a Frigate event, or None if not found.
+
+        Used by the FaceID MQTT handler to locate which session to re-attribute
+        after Frigate's async face recognition fires a sub_label update."""
+        row = self.conn.execute(
+            "SELECT id FROM sessions WHERE frigate_event_id = ? "
+            "ORDER BY started_at DESC LIMIT 1",
+            (frigate_event_id,),
+        ).fetchone()
+        return int(row["id"]) if row else None
+
+    def reassign_session_by_event(
+        self, frigate_event_id: str, person_name: str
+    ) -> Optional[dict]:
+        """Re-attribute all Unknown Juggler attempts in a session to a named person.
+
+        Called when FaceID publishes a sub_label for a Frigate event that was
+        already processed and bucketed to Unknown Juggler. Looks up the session
+        by event ID, finds the target person by name (creating them if needed),
+        moves every Unknown attempt in that session to the target, and
+        recomputes high scores for both. Returns a summary dict or None if the
+        session/person could not be found or there was nothing to move::
+
+            {
+              "session_id":    int,
+              "person_name":   str,
+              "moved_count":   int,   # number of attempt rows moved
+              "best_count":    int,   # highest juggle count moved
+              "new_high":      bool,  # whether this beat the person's record
+            }
+        """
+        session_id = self.lookup_session_by_event_id(frigate_event_id)
+        if session_id is None:
+            return None
+
+        uid = self.unknown_person_id
+        # Find attempts in this session still assigned to Unknown Juggler.
+        rows = self.conn.execute(
+            "SELECT id, count FROM attempts "
+            "WHERE session_id = ? AND person_id = ?",
+            (session_id, uid),
+        ).fetchall()
+        if not rows:
+            return None
+
+        # Resolve (or create) the target person.
+        pid = self.add_person(person_name)
+
+        best_count = max(int(r["count"]) for r in rows)
+        moved = len(rows)
+        attempt_ids = [int(r["id"]) for r in rows]
+
+        self.conn.execute(
+            f"UPDATE attempts SET person_id = ? "
+            f"WHERE id IN ({','.join('?' * moved)})",
+            [pid] + attempt_ids,
+        )
+
+        # Recompute high scores for both Unknown and the target person.
+        def _recompute(person_id: int) -> int:
+            row = self.conn.execute(
+                "SELECT MAX(count) AS hi FROM attempts WHERE person_id = ?",
+                (person_id,),
+            ).fetchone()
+            hi = int(row["hi"]) if row and row["hi"] is not None else 0
+            self.conn.execute(
+                "UPDATE people SET high_score = ? WHERE id = ?", (hi, person_id)
+            )
+            return hi
+
+        _recompute(uid)
+        new_person_high = _recompute(pid)
+        self.conn.commit()
+
+        return {
+            "session_id": session_id,
+            "person_name": person_name,
+            "moved_count": moved,
+            "best_count": best_count,
+            "new_high": new_person_high == best_count,
+        }
 
     def finish_session(self, session_id: int, frames: int,
                        duration_s: float = 0.0) -> None:
