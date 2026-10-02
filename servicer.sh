@@ -6,8 +6,15 @@
 #   ./servicer.sh --shut-down <service>
 #   ./servicer.sh --restart   <service>
 #   ./servicer.sh --check     <service>
+#   ./servicer.sh --deploy    <service>
 #
-# Services: mosquitto | frigate | homeassistant | juggletracker | all
+# Services: mosquitto | frigate | homeassistant | juggletracker | machinetelemetry | all
+#
+# --deploy copies source files from this repo into the deployed service directory.
+# It only copies the specific files listed in each deploy_* function (allowlist).
+# It never deletes files that only exist in the deployed directory (runtime data,
+# DBs, secrets, logs, etc.).
+# .env files are always skipped — those hold live secrets and are gitignored.
 
 set -euo pipefail
 
@@ -15,7 +22,7 @@ set -euo pipefail
 # Helpers
 # ---------------------------------------------------------------------------
 usage() {
-    echo "Usage: $0 --start|--shut-down|--restart|--check mosquitto|frigate|homeassistant|juggletracker|machinetelemetry|all" >&2
+    echo "Usage: $0 --start|--shut-down|--restart|--check|--deploy mosquitto|frigate|homeassistant|juggletracker|machinetelemetry|all" >&2
     exit 1
 }
 
@@ -140,6 +147,111 @@ stop_machinetelemetry() {
 }
 
 # ---------------------------------------------------------------------------
+# Per-service deploy
+# ---------------------------------------------------------------------------
+# deploy_rsync SRC_DIR DEST_DIR [INCLUDE_PATTERNS...]
+#   Copies files under SRC_DIR into DEST_DIR using rsync allowlist mode:
+#     - Only files matching an INCLUDE_PATTERN are transferred.
+#     - If no INCLUDE_PATTERNS are given, all files are synced (open allowlist).
+#     - Never deletes files that only exist in DEST_DIR.
+#     - Always skips *.env files (live secrets, gitignored), __pycache__, *.pyc,
+#       and .git artefacts regardless of the include list.
+deploy_rsync() {
+    local src="$1"
+    local dest="$2"
+    shift 2
+    local include_patterns=("$@")
+
+    log "Deploying $src -> $dest"
+
+    local rsync_args=(
+        -av
+        --no-group   # don't try to chgrp destination; deploy user may lack permission
+        # Always-excluded files — live secrets and build artefacts.
+        --exclude='*.env'
+        --exclude='.env_*'
+        --exclude='*.env_example'
+        --exclude='__pycache__/'
+        --exclude='*.pyc'
+        --exclude='.git/'
+        --exclude='.gitignore'
+    )
+
+    if [[ ${#include_patterns[@]} -gt 0 ]]; then
+        # Allowlist mode: include the listed patterns, exclude everything else.
+        # Directories must be included so rsync can descend into them; the
+        # trailing --exclude='*' drops anything not explicitly included.
+        rsync_args+=('--include=*/')
+        for pat in "${include_patterns[@]}"; do
+            rsync_args+=(--include="$pat")
+        done
+        rsync_args+=('--exclude=*')
+    fi
+
+    # Trailing slash on src so rsync copies the *contents* into dest.
+    rsync "${rsync_args[@]}" "${src%/}/" "$dest/"
+    log "Deploy of $(basename "$src") complete."
+}
+
+deploy_mosquitto() {
+    local repo
+    repo="$(cd "$(dirname "$0")" && pwd)"
+    deploy_rsync "$repo/mosquitto" ~/mosquitto \
+        'docker-compose.yml' \
+        'config/mosquitto.conf'
+    # password.txt is intentionally excluded — holds live broker passwords.
+}
+
+deploy_frigate() {
+    local repo
+    repo="$(cd "$(dirname "$0")" && pwd)"
+    deploy_rsync "$repo/frigate" ~/frigate \
+        'docker-compose.yml'       \
+        'config/config.yaml'       \
+        'inbox-bridge/bridge.py'   \
+        'inbox-bridge/requirements.txt' \
+        'inbox-bridge/Dockerfile'
+}
+
+deploy_homeassistant() {
+    local repo
+    repo="$(cd "$(dirname "$0")" && pwd)"
+    # The live HA config lives at ~/homeassistant/config/ and is managed by HA
+    # itself.  We only sync the files we own: docker-compose, the packages drop-
+    # in, and the dashboards.
+    deploy_rsync "$repo/homeassistant" ~/homeassistant \
+        'docker-compose.yml'                          \
+        'packages/juggle_tracker.yaml'                \
+        'configs/configuration.yaml'
+}
+
+deploy_juggletracker() {
+    local repo
+    repo="$(cd "$(dirname "$0")" && pwd)"
+    deploy_rsync "$repo/juggletracker" ~/juggletracker \
+        'setup.sh'                          \
+        'pyproject.toml'                    \
+        'requirements.txt'                  \
+        'src/juggletracker/*.py'            \
+        'tests/*.py'                        \
+        'tools/*.py'                        \
+        'deploy/*.sh'                       \
+        'cli.py'                            \
+        'config.yaml'                       \
+        'calibration_overrides.yaml'
+}
+
+deploy_machinetelemetry() {
+    local repo
+    repo="$(cd "$(dirname "$0")" && pwd)"
+    deploy_rsync "$repo/machinetelemetry" ~/machinetelemetry \
+        'telemetry_publisher.py'       \
+        'install.sh'                   \
+        'machinetelemetry.service'
+    # machine-telemetry.env is already excluded by the *.env rule in deploy_rsync.
+}
+
+# ---------------------------------------------------------------------------
 # Per-service checks
 # ---------------------------------------------------------------------------
 check_mosquitto()     { check_docker_service ~/mosquitto mosquitto; }
@@ -148,13 +260,13 @@ check_homeassistant() { check_docker_service ~/homeassistant homeassistant; }
 
 check_juggletracker() {
     log "Checking juggletracker..."
-    systemctl --user status juggle-tracker.service
+    systemctl --user status juggle-tracker.service --no-pager || true
     journalctl --user -u juggle-tracker.service -n 5 --no-pager
 }
 
 check_machinetelemetry() {
     log "Checking machinetelemetry..."
-    systemctl --user status machinetelemetry.service
+    systemctl --user status machinetelemetry.service --no-pager || true
     journalctl --user -u machinetelemetry.service -n 5 --no-pager
 }
 
@@ -167,7 +279,7 @@ COMMAND="$1"
 SERVICE="$2"
 
 case "$COMMAND" in
-    --start|--shut-down|--restart|--check) ;;
+    --start|--shut-down|--restart|--check|--deploy) ;;
     *) usage ;;
 esac
 
@@ -219,6 +331,13 @@ case "$COMMAND" in
             for svc in "${ALL_SERVICES[@]}"; do "check_${svc}"; done
         else
             "check_${SERVICE}"
+        fi
+        ;;
+    --deploy)
+        if [[ "$SERVICE" == "all" ]]; then
+            for svc in "${ALL_SERVICES[@]}"; do "deploy_${svc}"; done
+        else
+            "deploy_${SERVICE}"
         fi
         ;;
 esac
