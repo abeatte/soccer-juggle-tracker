@@ -1,40 +1,6 @@
-# Home Assistant Lovelace dashboard for the Soccer Juggle Tracker.
-#
-# This is a reference snapshot of the working dashboard (paste into a manual
-# Lovelace dashboard, or a `type: sections` view). It exercises the full feature
-# set exposed over MQTT discovery by the worker:
-#   * Live front-yard camera
-#   * Leaderboard (per-kid + Unknown Juggler high scores)
-#   * Per-person Reset buttons (admin-gated) — standalone `type: button` cards so
-#     the tap confirmation actually fires (an entities-row PRESS ignores it)
-#   * Per-person annotated best-run replays (inline <video> + a cache-busted
-#     "watch" link; cards hide until the sensor's `video_url` attribute is set)
-#   * Processing stats (last session, progress bar, CPU temp, worker state)
-#   * Calibration panel (23 numbers + Ball-CV switch, Apply & Restart / Revert)
-#   * Inbox delete (dropdown + Delete Selected Inbox Clip — cancels the in-flight
-#     run if the selected clip is the one being processed)
-#   * Queue & Reprocess (inbox/processed counts, reprocess file + global annotation switch)
-#   * Last Annotated Clip replay (3 ANDed visibility conditions)
-#
-# Notes / gotchas (see docs/HOME_ASSISTANT.md and the learned conventions):
-#   * Most worker entities use the default HA entity IDs from their MQTT
-#     discovery payload, such as `sensor.juggle_inbox_queue` and
-#     `select.juggle_reprocess_file`.
-#   * A few older/legacy leaderboard/replay sensors still use the older
-#     `soccer_juggle_tracker_*` naming, so verify exact IDs in Developer Tools
-#     -> States before copying this elsewhere.
-#   * In a `type: sections` view, each `sections:` item must be a section type
-#     (`type: grid`); vertical/horizontal-stacks are CARDS and go inside `cards:`.
-#   * Replay/last-reprocess cards depend on the worker publishing the `video_url`
-#     attribute (empty string when no clip) so attribute-based visibility works.
-#   * Admin-only cards are gated via `visibility: condition: user` (the owner's
-#     user id). Replace the user id with your own.
-#   * Custom cards used: `custom:entity-progress-card` (HACS). Install it or swap
-#     those rows for a native gauge/bar if you don't use HACS.
-#
-# The user id below is the dashboard owner's; change it for your install.
 type: sections
 sections:
+  # ── Live camera ────────────────────────────────────────────────────────────
   - type: grid
     cards:
       - show_state: true
@@ -44,184 +10,131 @@ sections:
         type: picture-entity
         entity: camera.front_yard
         name: Front Yard
+
+  # ── Leaderboard + Reset buttons ────────────────────────────────────────────
   - type: grid
     cards:
-      - type: entities
-        title: 🏆 Leader Board ⚽
-        entities:
-          - entity: sensor.soccer_juggle_tracker_unknown_juggler_juggle_high_score
-            name:
-              type: entity
-          - type: divider
-          - entity: sensor.soccer_juggle_tracker_artie_juggle_high_score
-            name:
-              type: entity
-          - entity: sensor.soccer_juggle_tracker_jessica_juggle_high_score
-            name:
-              type: entity
-          - entity: sensor.soccer_juggle_tracker_art_juggle_high_score
-            name:
-              type: entity
-          - entity: sensor.soccer_juggle_tracker_karen_juggle_high_score
-            name:
-              type: entity
-      - square: false
-        type: grid
+      - type: custom:auto-entities
+        card:
+          type: entities
+          title: 🏆 Leader Board ⚽
+        filter:
+          template: >
+            {% set result = namespace(entities=[]) %}
+            {% for s in states.sensor | selectattr('entity_id', 'search',
+            '^sensor\.soccer_juggle_tracker_.+_juggle_high_score$') %}
+              {% set clean_name = s.name | regex_replace(find='(?i)^Soccer Juggle Tracker\\s*', replace='') %}
+              {% set result.entities = result.entities + [{'entity': s.entity_id, 'name': clean_name}] %}
+            {% endfor %}
+            {{ result.entities }}
+        sort:
+          method: state
+          reverse: true
+          numeric: true
+
+      - type: custom:auto-entities
+        card:
+          title: Reset High Scores
+        filter:
+          template: >
+            {% set result = namespace(cards=[]) %}
+            {% for b in states.button | selectattr('entity_id', 'search',
+            '^button\.soccer_juggle_tracker_reset_.+_high_score$') %}
+              {% set player_raw = b.entity_id | regex_findall_index('reset_(.+)_high_score') %}
+              {% set player_name = 'Unknown' if player_raw == 'unknown_juggler' else player_raw | replace('_', ' ') | title %}
+              {% set button_card = {
+                'type': 'button',
+                'entity': b.entity_id,
+                'name': player_name,
+                'icon': 'mdi:trophy-broken',
+                'show_name': true,
+                'show_icon': true,
+                'show_state': false,
+                'icon_height': '48px',
+                'tap_action': {
+                  'action': 'perform-action',
+                  'perform_action': 'button.press',
+                  'target': {'entity_id': b.entity_id},
+                  'confirmation': {
+                    'text': "Reset the Unknown Juggler high score and delete the replay?" if player_raw == 'unknown_juggler'
+                            else "Reset " ~ player_name ~ "'s high score and delete the replay?"
+                  }
+                }
+              } %}
+              {% set result.cards = result.cards + [button_card] %}
+            {% endfor %}
+            {{ result.cards }}
+        visibility:
+          - condition: user
+            users:
+              - d0f74d3b9c434882829a4a12a467bb22
+
+  # ── Processing stats ───────────────────────────────────────────────────────
+  - type: grid
+    cards:
+      - type: vertical-stack
         cards:
-          - show_name: true
-            show_icon: true
-            type: button
-            entity: button.soccer_juggle_tracker_reset_unknown_juggler_high_score
-            name: Unknown
-            icon: mdi:trophy-broken
-            show_state: false
-            tap_action:
-              action: perform-action
-              perform_action: button.press
-              target:
-                entity_id: >-
-                  button.front_yard_soccer_juggle_tracker_reset_unknown_juggler_high_score
-              confirmation:
-                text: Reset the Unknown Juggler high score and delete the replay?
-            icon_height: 48px
-          - show_name: true
-            show_icon: true
-            type: button
-            entity: button.front_yard_soccer_juggle_tracker_reset_artie_high_score
-            name: Artie
-            icon: mdi:trophy-broken
-            show_state: false
-            tap_action:
-              action: perform-action
-              perform_action: button.press
-              target:
-                entity_id: button.front_yard_soccer_juggle_tracker_reset_artie_high_score
-              confirmation:
-                text: Reset Artie's high score and delete the replay?
-            icon_height: 48px
-          - show_name: true
-            show_icon: true
-            type: button
-            entity: button.front_yard_soccer_juggle_tracker_reset_jessica_high_score
-            name: Jessica
-            icon: mdi:trophy-broken
-            show_state: false
-            tap_action:
-              action: perform-action
-              perform_action: button.press
-              target:
-                entity_id: >-
-                  button.front_yard_soccer_juggle_tracker_reset_jessica_high_score
-              confirmation:
-                text: Reset Jessica's high score and delete the replay?
-            icon_height: 48px
-          - show_name: true
-            show_icon: true
-            type: button
-            entity: button.front_yard_soccer_juggle_tracker_reset_art_high_score
-            name: Art
-            icon: mdi:trophy-broken
-            show_state: false
-            tap_action:
-              action: perform-action
-              perform_action: button.press
-              target:
-                entity_id: button.front_yard_soccer_juggle_tracker_reset_art_high_score
-              confirmation:
-                text: Reset Art's high score and delete the replay?
-            icon_height: 48px
-          - show_name: true
-            show_icon: true
-            type: button
-            entity: button.front_yard_soccer_juggle_tracker_reset_karen_high_score
-            name: Karen
-            icon: mdi:trophy-broken
-            show_state: false
-            tap_action:
-              action: perform-action
-              perform_action: button.press
-              target:
-                entity_id: button.front_yard_soccer_juggle_tracker_reset_karen_high_score
-              confirmation:
-                text: Reset Karen's high score and delete the replay?
-            icon_height: 48px
-        visibility:
-          - condition: user
-            users:
-              - d0f74d3b9c434882829a4a12a467bb22
-        columns: 5
-        title: Reset High Scores
-  - type: grid
-    cards:
-      - type: entities
-        title: ⚙️ Processing Stats ⚙️
-        entities:
-          - entity: sensor.juggle_last_session
-            name:
-              type: entity
-          - entity: sensor.juggle_inbox_queue
-            name: Inbox queue
-          - type: divider
-          - type: custom:entity-progress-card
-            entity: sensor.soccer_juggle_tracker_juggle_processing_progress
-            layout: horizontal
-            size: medium
-            name: Juggle Processing Progress
-            bar_size: small
-          - type: custom:entity-progress-card
-            entity: sensor.frigate_box_macbook_pro_cpu_temperature
-            layout: horizontal
-            size: medium
-            name: CPU Temperature
-            bar_size: small
-            theme: critical_when_high
-            max_value: 90
-            min_value: 70
-          - type: custom:entity-progress-card
-            entity: sensor.frigate_coral_inference_speed
-            layout: horizontal
-            size: medium
-            theme: optimal_when_low
-            max_value: 0.1
-            min_value: 0
-            name: Coral (inference) speed
-          - type: custom:entity-progress-card
-            entity: sensor.frigate_detection_fps
-            layout: horizontal
-            size: medium
-            theme: optimal_when_low
-            max_value: 90
-            min_value: 0
-          - entity: sensor.soccer_juggle_tracker_juggle_worker_state
-            name:
-              type: entity
-          - type: divider
-          - entity: switch.juggle_annotate_processed_clips
-            name:
-              type: entity
-      - type: markdown
-        content: >
-          {% set k =
-          states['sensor.soccer_juggle_tracker_juggle_last_processed']
-          %} {% if k %}{% set u = k.attributes.get('video_url') %}**{{ k.state
-          }}**{% if k.attributes.get('annotated') %} · annotated{% endif %} — best {{ k.attributes.get('best', 0) }} ({{
-          k.attributes.get('attempts', 0) }} attempts){% if u %}
+          - type: entities
+            title: ⚙️ Processing Stats ⚙️
+            entities:
+              - entity: sensor.juggle_inbox_queue
+                name: Inbox queue
+              - entity: sensor.juggle_processed_count
+                name: Processed count
+              - type: divider
+              - type: custom:entity-progress-card
+                entity: sensor.soccer_juggle_tracker_juggle_processing_progress
+                layout: horizontal
+                size: medium
+                name: Processing Progress
+                bar_size: small
+              - type: custom:entity-progress-card
+                entity: sensor.frigate_box_macbook_pro_cpu_temperature
+                layout: horizontal
+                size: medium
+                name: CPU Temperature
+                bar_size: small
+                theme: critical_when_high
+                max_value: 90
+                min_value: 70
+              - type: custom:entity-progress-card
+                entity: sensor.frigate_coral_inference_speed
+                layout: horizontal
+                size: medium
+                name: Coral inference speed
+                theme: optimal_when_low
+                max_value: 0.1
+                min_value: 0
+                bar_size: small
+              - entity: sensor.soccer_juggle_tracker_juggle_worker_state
+                name: Worker State
+              - type: divider
+              - entity: switch.juggle_annotate_processed_clips
+                name: Annotate Processed Clips
 
-          <video controls preload="metadata" width="100%" src="{{ u
-          }}"></video>{% else %}
+          - type: markdown
+            title: 🎬 Last Processed Clip
+            content: >-
+              {% set k = states['sensor.juggle_last_processed'] %}
+              {% if k %}
+                {% set u = k.attributes.get('video_url', '') %}
+                **{{ k.state }}**{% if k.attributes.get('annotated') %} · annotated{% endif %}
+                — best {{ k.attributes.get('best', 0) }} ({{ k.attributes.get('attempts', 0) }} attempts)
+                {% if u %}· <a href="{{ u }}" target="_blank" rel="noopener">▶ watch</a>
+                {% else %}_(no inline video — clip isn't H.264)_{% endif %}
+              {% endif %}
+            visibility:
+              - condition: state
+                entity: sensor.juggle_last_processed
+                state_not: unknown
+              - condition: state
+                entity: sensor.juggle_last_processed
+                state_not: unavailable
+              - condition: user
+                users:
+                  - d0f74d3b9c434882829a4a12a467bb22
 
-          _(no inline video — clip isn't H.264)_{% endif %}{% endif %}
-        title: 🎬 Last Processed Clip
-        visibility:
-          - condition: state
-            entity: sensor.soccer_juggle_tracker_juggle_last_processed
-            state_not: unknown
-          - condition: state
-            entity: sensor.soccer_juggle_tracker_juggle_last_processed
-            state_not: unavailable
-          - condition: user
-            users:
-              - d0f74d3b9c434882829a4a12a467bb22
+  # ── Calibration ────────────────────────────────────────────────────────────
   - type: grid
     cards:
       - type: entities
@@ -232,137 +145,74 @@ sections:
               type: section
               label: Detection confidence
             entities:
-              - entity: number.front_yard_soccer_juggle_tracker_juggle_ball_confidence
-                name:
-                  type: entity
-              - entity: >-
-                  number.front_yard_soccer_juggle_tracker_juggle_person_confidence
-                name:
-                  type: entity
-              - entity: number.front_yard_soccer_juggle_tracker_juggle_face_confidence
-                name:
-                  type: entity
+              - entity: number.soccer_juggle_tracker_juggle_ball_confidence
+                name: Ball Confidence
+              - entity: number.soccer_juggle_tracker_juggle_person_confidence
+                name: Person Confidence
+
           - type: custom:fold-entity-row
             head:
               type: section
               label: Juggle counting
             entities:
-              - entity: >-
-                  number.front_yard_soccer_juggle_tracker_juggle_contact_radius_px
-                name:
-                  type: entity
-              - entity: >-
-                  number.front_yard_soccer_juggle_tracker_juggle_min_arc_height_px
-                name:
-                  type: entity
+              - entity: number.soccer_juggle_tracker_juggle_contact_radius_px
+                name: Contact Radius (px)
+              - entity: number.soccer_juggle_tracker_juggle_min_arc_height_px
+                name: Min Arc Height (px)
                 icon: mdi:chart-bell-curve
-              - entity: >-
-                  number.front_yard_soccer_juggle_tracker_juggle_smoothing_window
-                name:
-                  type: entity
-              - entity: >-
-                  number.front_yard_soccer_juggle_tracker_juggle_lost_ball_frames
-                name:
-                  type: entity
-              - entity: >-
-                  number.front_yard_soccer_juggle_tracker_juggle_ball_bridge_frames
-                name:
-                  type: entity
-              - entity: >-
-                  number.front_yard_soccer_juggle_tracker_juggle_ground_margin_px
-                name:
-                  type: entity
-              - entity: >-
-                  number.front_yard_soccer_juggle_tracker_juggle_min_contact_gap_frames
-                name:
-                  type: entity
+              - entity: number.soccer_juggle_tracker_juggle_smoothing_window
+                name: Smoothing Window
+              - entity: number.soccer_juggle_tracker_juggle_lost_ball_frames
+                name: Lost-Ball Frames
+              - entity: number.soccer_juggle_tracker_juggle_ball_bridge_frames
+                name: Ball Bridge Frames
+              - entity: number.soccer_juggle_tracker_juggle_ground_margin_px
+                name: Ground Margin (px)
+              - entity: number.soccer_juggle_tracker_juggle_min_contact_gap_frames
+                name: Min Contact Gap (frames)
                 icon: mdi:timer-sand
+
           - type: custom:fold-entity-row
             head:
               type: section
               label: Ball CV fallback (only active when the switch is ON)
             entities:
-              - entity: >-
-                  switch.front_yard_soccer_juggle_tracker_juggle_ball_cv_fallback
-                name:
-                  type: entity
-              - entity: >-
-                  number.front_yard_soccer_juggle_tracker_juggle_ball_cv_sensitivity
-                name:
-                  type: entity
-              - entity: >-
-                  number.front_yard_soccer_juggle_tracker_juggle_ball_cv_min_radius
-                name:
-                  type: entity
-              - entity: >-
-                  number.front_yard_soccer_juggle_tracker_juggle_ball_cv_max_radius
-                name:
-                  type: entity
-              - entity: >-
-                  number.front_yard_soccer_juggle_tracker_juggle_ball_cv_search_radius
-                name:
-                  type: entity
-              - entity: >-
-                  number.front_yard_soccer_juggle_tracker_juggle_ball_cv_edge_threshold
-                name:
-                  type: entity
-              - entity: >-
-                  number.front_yard_soccer_juggle_tracker_juggle_ball_cv_accumulator_dp
-                name:
-                  type: entity
-          - type: custom:fold-entity-row
-            head:
-              type: section
-              label: Identity
-            entities:
-              - entity: >-
-                  number.front_yard_soccer_juggle_tracker_juggle_face_match_threshold
-                name:
-                  type: entity
-              - entity: >-
-                  number.front_yard_soccer_juggle_tracker_juggle_identity_vote_frames
-                name:
-                  type: entity
-              - entity: number.front_yard_soccer_juggle_tracker_juggle_max_people
-                name:
-                  type: entity
+              - entity: switch.soccer_juggle_tracker_juggle_ball_cv_fallback
+                name: Ball CV Fallback
+              - entity: number.soccer_juggle_tracker_juggle_ball_cv_sensitivity
+                name: Ball CV Sensitivity
+              - entity: number.soccer_juggle_tracker_juggle_ball_cv_min_radius
+                name: Ball CV Min Radius
+              - entity: number.soccer_juggle_tracker_juggle_ball_cv_max_radius
+                name: Ball CV Max Radius
+              - entity: number.soccer_juggle_tracker_juggle_ball_cv_search_radius
+                name: Ball CV Search Radius
+              - entity: number.soccer_juggle_tracker_juggle_ball_cv_edge_threshold
+                name: Ball CV Edge Threshold
+              - entity: number.soccer_juggle_tracker_juggle_ball_cv_accumulator_dp
+                name: Ball CV Accumulator (dp)
+
           - type: custom:fold-entity-row
             head:
               type: section
               label: Performance & thermal
             entities:
-              - entity: >-
-                  number.front_yard_soccer_juggle_tracker_juggle_inference_resolution
-                name:
-                  type: entity
-              - entity: >-
-                  number.front_yard_soccer_juggle_tracker_juggle_person_pose_stride
-                name:
-                  type: entity
-              - entity: number.front_yard_soccer_juggle_tracker_juggle_torch_threads
-                name:
-                  type: entity
-              - entity: >-
-                  number.front_yard_soccer_juggle_tracker_juggle_thermal_max_temp_c
-                name:
-                  type: entity
-              - entity: >-
-                  number.front_yard_soccer_juggle_tracker_juggle_thermal_resume_temp_c
-                name:
-                  type: entity
-          - type: custom:fold-entity-row
-            head:
-              type: section
-              label: File Management
-            entities:
-              - entity: >-
-                  number.front_yard_soccer_juggle_tracker_reprocess_thumbnail_second
-                name:
-                  type: entity
+              - entity: number.soccer_juggle_tracker_juggle_inference_resolution
+                name: Inference Resolution
+              - entity: number.soccer_juggle_tracker_juggle_person_pose_stride
+                name: Person/Pose Stride
+              - entity: number.soccer_juggle_tracker_juggle_torch_threads
+                name: Torch Threads
+              - entity: number.soccer_juggle_tracker_juggle_thermal_max_temp_c
+                name: Thermal Max Temp (C)
+              - entity: number.soccer_juggle_tracker_juggle_thermal_resume_temp_c
+                name: Thermal Resume Temp (C)
+
         visibility:
           - condition: user
             users:
               - d0f74d3b9c434882829a4a12a467bb22
+
       - type: horizontal-stack
         cards:
           - show_name: true
@@ -376,8 +226,7 @@ sections:
               action: perform-action
               perform_action: button.press
               target:
-                entity_id: >-
-                  button.front_yard_soccer_juggle_tracker_apply_calibration_restart
+                entity_id: button.soccer_juggle_tracker_apply_calibration_restart
             icon_height: 48px
           - show_name: true
             show_icon: true
@@ -390,136 +239,54 @@ sections:
               action: perform-action
               perform_action: button.press
               target:
-                entity_id: >-
-                  button.front_yard_soccer_juggle_tracker_revert_calibration_to_defaults
+                entity_id: button.soccer_juggle_tracker_revert_calibration_to_defaults
               confirmation:
-                text: >-
-                  Discard calibration tweaks and restart with config.yaml
-                  defaults?
+                text: Discard calibration tweaks and restart with config.yaml defaults?
             icon_height: 48px
+
     visibility:
       - condition: user
         users:
           - d0f74d3b9c434882829a4a12a467bb22
+
+  # ── Per-person replay clips (dynamic, shown only when replay exists) ────────
   - type: grid
     cards:
-      - type: markdown
-        content: >
-          {% set e =
-          'sensor.soccer_juggle_tracker_unknown_juggler_juggle_high_score'
-          %}  {% set k = states[e] %}  {% if k %}  {% set u =
-          k.attributes.get('video_url') %}  {% if u %}  <video controls
-          preload="metadata" width="100%" src="{{ u }}"></video> {% else %} No
-          replay yet {% endif %} {%endif%}
-        title: Unknown Juggler -- best run
-      - type: markdown
-        content: >
-          {% set e =
-          'sensor.soccer_juggle_tracker_unknown_juggler_juggle_high_score'
-          %}  {% set k = states[e] %}  {% if k %}  {% set u =
-          k.attributes.get('video_url') %}  {% if u %}  **{{ entity_name(e) }}**
-          · <a href="{{ u }}" target="_blank" rel="noopener">▶ watch</a> {%
-          endif %} {% endif %}
-    visibility:
-      - condition: state
-        attribute: video_url
-        entity: >-
-          sensor.soccer_juggle_tracker_unknown_juggler_juggle_high_score
-        state_not: ""
-  - type: grid
-    cards:
-      - type: markdown
-        content: >
-          {% set e = 'sensor.soccer_juggle_tracker_artie_juggle_high_score' %} 
-          {% set k = states[e] %}  {% if k %}  {% set u =
-          k.attributes.get('video_url') %}  {% if u %}  <video controls
-          preload="metadata" width="100%" src="{{ u }}"></video> {% else %} No
-          replay yet {% endif %} {%endif%}
-        title: Artie -- best run
-      - type: markdown
-        content: >
-          {% set e = 'sensor.soccer_juggle_tracker_artie_juggle_high_score' %} 
-          {% set k = states[e] %}  {% if k %}  {% set u =
-          k.attributes.get('video_url') %}  {% if u %}  **{{ entity_name(e) }}**
-          · <a href="{{ u }}" target="_blank" rel="noopener">▶ watch</a> {%
-          endif %} {% endif %}
-    visibility:
-      - condition: state
-        attribute: video_url
-        entity: sensor.soccer_juggle_tracker_artie_juggle_high_score
-        state_not: ""
-  - type: grid
-    cards:
-      - type: markdown
-        content: >
-          {% set e = 'sensor.soccer_juggle_tracker_jessica_juggle_high_score'
-          %}  {% set k = states[e] %}  {% if k %}  {% set u =
-          k.attributes.get('video_url') %}  {% if u %}  <video controls
-          preload="metadata" width="100%" src="{{ u }}"></video> {% else %} No
-          replay yet {% endif %} {%endif%}
-        title: Jessica -- best run
-      - type: markdown
-        content: >
-          {% set e = 'sensor.soccer_juggle_tracker_jessica_juggle_high_score'
-          %}  {% set k = states[e] %}  {% if k %}  {% set u =
-          k.attributes.get('video_url') %}  {% if u %}  **{{ entity_name(e) }}**
-          · <a href="{{ u }}" target="_blank" rel="noopener">▶ watch</a> {%
-          endif %} {% endif %}
-    visibility:
-      - condition: state
-        attribute: video_url
-        entity: sensor.soccer_juggle_tracker_jessica_juggle_high_score
-        state_not: ""
-  - type: grid
-    cards:
-      - type: markdown
-        content: >
-          {% set e = 'sensor.soccer_juggle_tracker_art_juggle_high_score' %}  {%
-          set k = states[e] %}  {% if k %}  {% set u =
-          k.attributes.get('video_url') %}  {% if u %}  <video controls
-          preload="metadata" width="100%" src="{{ u }}"></video> {% else %} No
-          replay yet {% endif %} {%endif%}
-        title: Art -- best run
-      - type: markdown
-        content: >
-          {% set e = 'sensor.soccer_juggle_tracker_art_juggle_high_score' %}  {%
-          set k = states[e] %}  {% if k %}  {% set u =
-          k.attributes.get('video_url') %}  {% if u %}  **{{ entity_name(e) }}**
-          · <a href="{{ u }}" target="_blank" rel="noopener">▶ watch</a> {%
-          endif %} {% endif %}
-    visibility:
-      - condition: state
-        attribute: video_url
-        entity: sensor.soccer_juggle_tracker_art_juggle_high_score
-        state_not: ""
-  - type: grid
-    cards:
-      - type: markdown
-        content: >
-          {% set e = 'sensor.soccer_juggle_tracker_karen_juggle_high_score' %}
-          {% set k = states[e] %} {% if k %}  
-            {% set u = k.attributes.get('video_url') %}  
-            {% if u %}  
-              <video controls preload="metadata" width="100%" src="{{ u }}"></video> 
-            {% else %}
-              No replay yet 
-            {% endif %} 
-          {%endif%}
-        title: Karen -- best run
-      - type: markdown
-        content: >
-          {% set e = 'sensor.soccer_juggle_tracker_karen_juggle_high_score' %}
-          {% set k = states[e] %} {% if k %}
-            {% set u = k.attributes.get('video_url') %}
-            {% if u %}
-            **{{ entity_name(e)}}** · <a href="{{ u }}" target="_blank" rel="noopener">▶ watch</a> 
-            {% endif %}
-          {% endif %}
-    visibility:
-      - condition: state
-        attribute: video_url
-        entity: sensor.soccer_juggle_tracker_karen_juggle_high_score
-        state_not: ""
+      - type: custom:auto-entities
+        card:
+          type: entities
+          title: 🎬 Best Runs
+        filter:
+          include:
+            - entity_id: sensor.soccer_juggle_tracker_*_juggle_high_score
+              state: "> 0"
+              options:
+                type: custom:button-card
+                show_name: false
+                show_state: false
+                show_icon: false
+                custom_fields:
+                  video: >
+                    [[[
+                      const u = entity.attributes.video_url;
+                      const n = entity.attributes.friendly_name
+                        .replace(/Soccer Juggle Tracker /i, '')
+                        .replace(/ Juggle High Score$/i, '');
+                      if (!u) return '';
+                      return `<div style='padding:8px;text-align:left'>
+                        <div style='font-size:1.1em;font-weight:bold;margin-bottom:4px'>
+                          ${n} &mdash; ${entity.state} juggles
+                          <a href='${u}' target='_blank' style='font-size:0.8em;margin-left:8px'>&#9654; open</a>
+                        </div>
+                        <video controls preload='metadata' style='width:100%;border-radius:4px' src='${u}'></video>
+                      </div>`;
+                    ]]]
+        sort:
+          method: state
+          reverse: true
+          numeric: true
+
+  # ── Queue & Reprocess ──────────────────────────────────────────────────────
   - type: grid
     cards:
       - type: vertical-stack
@@ -536,14 +303,12 @@ sections:
                 name: Reprocess file
           - type: markdown
             content: >
-              {% set k =
-              states['sensor.juggle_reprocess_preview']
-              %} {% if k %}{% set u = k.attributes.get('video_url') %}{% set p =
-              k.attributes.get('attributed_to') %}{% if u %}**{{ k.state }}** ·
-              {{ p or 'No juggle attempts' }}
-
-              <video controls preload="metadata" width="100%" src="{{ u
-              }}"></video>{% endif %}{% endif %}
+              {% set k = states['sensor.juggle_reprocess_preview'] %}
+              {% if k %}{% set u = k.attributes.get('video_url') %}{% set p = k.attributes.get('attributed_to') %}
+                {% if u %}**{{ k.state }}** · {{ p or 'No juggle attempts' }}
+                  <video controls preload="metadata" width="100%" src="{{ u }}"></video>
+                {% endif %}
+              {% endif %}
             title: 🎬 Selected Clip
             visibility:
               - condition: state
@@ -562,10 +327,13 @@ sections:
             grid_options:
               rows: auto
               columns: full
+
     visibility:
       - condition: user
         users:
           - d0f74d3b9c434882829a4a12a467bb22
+
+  # ── Inbox management ───────────────────────────────────────────────────────
   - type: grid
     cards:
       - type: entities
@@ -582,13 +350,15 @@ sections:
           action: toggle
           confirmation:
             text: >-
-              Delete the selected inbox clip? If it's processing now, the run is
-              cancelled.
+              Delete the selected inbox clip? If it's processing now, the run is cancelled.
         icon_height: 48px
         grid_options:
           rows: auto
           columns: full
+
     visibility:
       - condition: user
         users:
           - d0f74d3b9c434882829a4a12a467bb22
+
+cards: []
