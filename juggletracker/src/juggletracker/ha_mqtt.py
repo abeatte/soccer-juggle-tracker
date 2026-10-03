@@ -24,7 +24,7 @@ from typing import Optional
 from urllib.parse import quote
 
 from . import config as cfgmod
-from .db import UNKNOWN_NAME
+from .db import Database, UNKNOWN_NAME
 
 try:
     import paho.mqtt.client as mqtt
@@ -41,6 +41,14 @@ SELECT_NONE = "(none)"
 
 def _slug(name: str) -> str:
     return re.sub(r"[^a-z0-9_]+", "_", name.strip().lower()).strip("_")
+
+
+def _event_id_from_filename(filename: str) -> Optional[str]:
+    stem = os.path.splitext(os.path.basename(filename))[0]
+    parts = stem.rsplit("_", 1)
+    if len(parts) == 2 and parts[0].startswith("clip_"):
+        return parts[1]
+    return None
 
 
 def _build_reprocess_options(
@@ -400,9 +408,9 @@ class HAPublisher:
               flush=True)
 
         try:
-            from .db import Database
             db = Database(self.cfg.database.path)
             try:
+                db.remember_faceid_label(event_id, person_name)
                 result = db.reassign_session_by_event(event_id, person_name)
                 if result is None:
                     # reassign_session_by_event returns None for two distinct
@@ -836,8 +844,9 @@ class HAPublisher:
         # placeholder as the first option so there's a valid "nothing selected"
         # state to fall back to after a reprocess requeues the chosen file.
         attributions = (
-            self._worker.db.clip_attributions(pfiles[:50])
-            if self._worker is not None else {}
+            Database.clip_attributions_from_path(
+                self.cfg.database.path, pfiles[:50]
+            ) if self._worker is not None else {}
         )
         opts, option_to_filename, filename_to_option = _build_reprocess_options(
             pfiles[:50], attributions)
@@ -880,7 +889,21 @@ class HAPublisher:
         if not os.path.isfile(src):
             print(f"  [reprocess] '{name}' not found in processed", flush=True)
             return
+        event_id = _event_id_from_filename(name)
+        pending_label = None
+        if event_id:
+            try:
+                db = Database(self.cfg.database.path)
+                try:
+                    pending_label = db.faceid_label(event_id)
+                finally:
+                    db.close()
+            except Exception as exc:
+                print(f"  [reprocess] FaceID label lookup failed for {event_id}: "
+                      f"{exc}", flush=True)
         try:
+            if pending_label and event_id:
+                self._pending_faceid[event_id] = pending_label
             os.makedirs(inbox, exist_ok=True)
             dst = os.path.join(inbox, name)
             shutil.copy2(src, dst)
@@ -903,6 +926,9 @@ class HAPublisher:
                                 retain=True)
             self._update_reprocess_preview()  # clear the stale preview
         except Exception as exc:
+            if (pending_label and event_id
+                    and self._pending_faceid.get(event_id) == pending_label):
+                self._pending_faceid.pop(event_id, None)
             print(f"  [reprocess] failed to requeue '{name}': {exc}", flush=True)
 
     def _do_delete_inbox(self) -> None:
@@ -1224,6 +1250,56 @@ class HAPublisher:
             json.dumps({"name": os.path.basename(clip_name), "video_url": url,
                         "annotated": annotated, "ts": ver}),
             retain=True)
+
+    def publish_last_processed(self, clip_path: str,
+                               results: list[dict]) -> None:
+        """Publish the latest processed clip and its browser-playable URL."""
+        if not self.enabled:
+            return
+        filename = os.path.basename(clip_path)
+        event_id = _event_id_from_filename(filename)
+        people = list(dict.fromkeys(
+            str(item.get("person", "")).strip()
+            for item in results if item.get("person")
+        ))
+        counts = [int(item.get("count", 0)) for item in results]
+        codec = self._probe_codec(clip_path) if os.path.isfile(clip_path) else None
+        url = ""
+        if codec == "h264" and filename.lower().endswith(".mp4"):
+            media_root = self.media_base.rstrip("/").rsplit("/", 1)[0]
+            url = f"{media_root}/processed/{quote(filename, safe='')}?v={int(time.time())}"
+        if (event_id and self._recent_faceid_attribution
+                and self._recent_faceid_attribution[0] == event_id):
+            people = [self._recent_faceid_attribution[1]]
+            self._recent_faceid_attribution = None
+        payload = {
+            "name": filename,
+            "video_url": url,
+            "best": max(counts, default=0),
+            "attempts": len(results),
+            "attributed_to": ", ".join(people),
+            "ts": int(time.time()),
+        }
+        self._last_processed_event_id = event_id
+        self._last_processed_payload = payload
+        self.client.publish(
+            f"{self.node}/last_processed", json.dumps(payload), retain=True
+        )
+
+    def note_last_processed_attribution(self, event_id: str,
+                                        person_name: str) -> None:
+        """Refresh the last-processed payload if FaceID labels that same event."""
+        if not self.enabled or not event_id or not person_name.strip():
+            return
+        person_name = person_name.strip()
+        if event_id != self._last_processed_event_id or self._last_processed_payload is None:
+            self._recent_faceid_attribution = (event_id, person_name)
+            return
+        self._last_processed_payload["attributed_to"] = person_name.strip()
+        self.client.publish(
+            f"{self.node}/last_processed",
+            json.dumps(self._last_processed_payload), retain=True,
+        )
 
     # ------------------------------------------------------------------
     def publish_session(self, results: list[dict]) -> None:

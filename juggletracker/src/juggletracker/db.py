@@ -46,6 +46,11 @@ CREATE TABLE IF NOT EXISTS attempts (
     ended_reason TEXT,                  -- 'hand' | 'ground' | 'lost' | 'end'
     created_at  REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS faceid_labels (
+    event_id    TEXT PRIMARY KEY,
+    person_name TEXT NOT NULL,
+    updated_at  REAL NOT NULL
+);
 """
 
 
@@ -111,6 +116,25 @@ class Database:
             (path, float(ts), person_id),
         )
         self.conn.commit()
+
+    def remember_faceid_label(self, event_id: str, person_name: str) -> None:
+        """Persist the latest nonempty FaceID label received for an event."""
+        if not event_id or not person_name.strip():
+            return
+        self.conn.execute(
+            "INSERT INTO faceid_labels(event_id, person_name, updated_at) "
+            "VALUES (?, ?, ?) ON CONFLICT(event_id) DO UPDATE SET "
+            "person_name=excluded.person_name, updated_at=excluded.updated_at",
+            (event_id, person_name.strip(), time.time()),
+        )
+        self.conn.commit()
+
+    def faceid_label(self, event_id: str) -> Optional[str]:
+        row = self.conn.execute(
+            "SELECT person_name FROM faceid_labels WHERE event_id = ?",
+            (event_id,),
+        ).fetchone()
+        return str(row["person_name"]) if row else None
 
     def backfill_unknown_attempts(self) -> tuple[int, int]:
         """One-time: credit historical unattributed (NULL) attempts to the
@@ -237,14 +261,16 @@ class Database:
         )
         self.conn.commit()
 
-    def clip_attributions(self, clip_names: Iterable[str]) -> dict[str, list[str]]:
+    @staticmethod
+    def _clip_attributions(conn: sqlite3.Connection,
+                           clip_names: Iterable[str]) -> dict[str, list[str]]:
         """Return the latest session's attributed people for each clip basename."""
         wanted = {os.path.basename(name) for name in clip_names}
         if not wanted:
             return {}
 
         latest: dict[str, int] = {}
-        for row in self.conn.execute(
+        for row in conn.execute(
             "SELECT id, clip_path FROM sessions ORDER BY started_at DESC, id DESC"
         ):
             name = os.path.basename(row["clip_path"])
@@ -254,7 +280,7 @@ class Database:
         if not latest:
             return {}
         placeholders = ",".join("?" for _ in latest)
-        rows = self.conn.execute(
+        rows = conn.execute(
             "SELECT DISTINCT a.session_id, COALESCE(p.name, ?) AS person "
             "FROM attempts a LEFT JOIN people p ON p.id = a.person_id "
             f"WHERE a.session_id IN ({placeholders}) ORDER BY person",
@@ -269,6 +295,21 @@ class Database:
             name: people_by_session[session_id]
             for name, session_id in latest.items()
         }
+
+    def clip_attributions(self, clip_names: Iterable[str]) -> dict[str, list[str]]:
+        return self._clip_attributions(self.conn, clip_names)
+
+    @classmethod
+    def clip_attributions_from_path(
+        cls, path: str, clip_names: Iterable[str]
+    ) -> dict[str, list[str]]:
+        """Read clip attributions through a connection owned by this thread."""
+        conn = sqlite3.connect(path, timeout=5)
+        conn.row_factory = sqlite3.Row
+        try:
+            return cls._clip_attributions(conn, clip_names)
+        finally:
+            conn.close()
 
     def abort_session(self, session_id: int) -> None:
         """Discard a session and everything it recorded.
