@@ -134,8 +134,9 @@ Process a real clip with `--debug-video` and watch:
   improving pose (larger `infer_long_edge`) or check `illegal_keypoints`.
 - **Dropped ball not ending streak** → lower `juggle.lost_frames_reset`.
 - **Wrong/Unknown person** → add more face photos in FaceID's HA panel;
-  if FaceID isn't firing at all, check FaceID logs in HA. Use the HA
-  **Reassign High Score** control to manually correct misattributed sessions.
+  if FaceID isn't firing at all, check FaceID logs in HA. After correcting a
+  clip's FaceID label, select that archived clip in **Queue & Reprocess** and
+  run it again to update its attribution.
 
 ## Publishing to your private GitHub repo (later)
 

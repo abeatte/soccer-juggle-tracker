@@ -12,8 +12,29 @@ from juggletracker.ha_mqtt import HAPublisher  # noqa: E402
 
 
 class FakeClient:
+    def __init__(self):
+        self.messages = []
+
     def publish(self, topic, payload, retain=False):
-        pass
+        self.messages.append((topic, payload, retain))
+
+
+def test_retired_reassign_discovery_is_cleared():
+    publisher = HAPublisher.__new__(HAPublisher)
+    publisher.client = FakeClient()
+    publisher.prefix = "homeassistant"
+    publisher.node = "juggle_tracker"
+
+    publisher._retire_reassign_entities()
+
+    assert [topic for topic, payload, retain in publisher.client.messages
+            if payload == "" and retain] == [
+        "homeassistant/button/juggle_tracker/reassign/config",
+        "homeassistant/select/juggle_tracker/reassign_source/config",
+        "homeassistant/select/juggle_tracker/reassign_target/config",
+        "juggle_tracker/reassign_source",
+        "juggle_tracker/reassign_target",
+    ]
 
 
 def test_latest_faceid_label_is_persisted_for_reprocessing(tmp_path):

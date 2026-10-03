@@ -13,8 +13,6 @@
 #   * Calibration panel (23 numbers + Ball-CV switch, Apply & Restart / Revert)
 #   * Inbox delete (dropdown + Delete Selected Inbox Clip — cancels the in-flight
 #     run if the selected clip is the one being processed)
-#   * Reassign High Score (From/To person dropdowns + Reassign button — moves a
-#     misattributed record, e.g. an Unknown Juggler score that was really a kid)
 #   * Queue & Reprocess (inbox/processed counts, reprocess file + global annotation switch)
 #   * Last Annotated Clip replay (3 ANDed visibility conditions)
 #
@@ -195,6 +193,10 @@ sections:
             max_value: 90
             min_value: 0
           - entity: sensor.soccer_juggle_tracker_juggle_worker_state
+            name:
+              type: entity
+          - type: divider
+          - entity: switch.juggle_annotate_processed_clips
             name:
               type: entity
       - type: markdown
@@ -550,9 +552,6 @@ sections:
               - type: divider
               - entity: select.juggle_reprocess_file
                 name: Reprocess file
-              - entity: switch.juggle_annotate_processed_clips
-                name:
-                  type: entity
           - type: markdown
             content: >
               {% set k =
@@ -607,34 +606,6 @@ sections:
         grid_options:
           rows: auto
           columns: full
-    visibility:
-      - condition: user
-        users:
-          - d0f74d3b9c434882829a4a12a467bb22
-  - type: grid
-    cards:
-      - type: entities
-        title: 🔀 Reassign High Score
-        entities:
-          - entity: select.soccer_juggle_tracker_juggle_reassign_from
-            name: From (wrong person)
-          - entity: select.soccer_juggle_tracker_juggle_reassign_to
-            name: To (correct person)
-      - show_name: true
-        show_icon: true
-        type: button
-        entity: button.soccer_juggle_tracker_reassign_high_score
-        name: Reassign High Score
-        icon: mdi:account-switch
-        tap_action:
-          action: toggle
-          confirmation:
-            text: >-
-              Move the "From" person's current high score (and its replay clip)
-              to the "To" person? This rewrites the leaderboard.
-        grid_options:
-          columns: full
-        icon_height: 48px
     visibility:
       - condition: user
         users:

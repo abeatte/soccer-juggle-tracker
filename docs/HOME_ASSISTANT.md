@@ -515,9 +515,9 @@ In FaceID's HA configuration panel, add each person you want to track:
 
 > FaceID uses a single snapshot per Frigate event (the "best" frame Frigate
 > selected). If the kid is running away or facing away at that moment, FaceID
-> won't fire a label. Sessions where it doesn't fire stay as Unknown Juggler —
-> use the **Reassign High Score** control in the tracker dashboard to fix those
-> manually.
+> won't fire a label. Sessions where it doesn't fire stay as Unknown Juggler.
+> After correcting or adding the event's FaceID label, select the archived clip
+> in **Queue & Reprocess** and run it again to apply the latest label.
 
 ### Step 3 — enable FaceID listening in the juggle tracker
 
@@ -576,10 +576,10 @@ seconds.
 
 ### What happens if FaceID doesn't fire
 
-Sessions stay attributed to **Unknown Juggler** — the score still accrues there,
-a replay video is still saved, and you can always correct it manually using the
-**Reassign High Score** dashboard control (source: Unknown Juggler → target: Kid1
-→ press Reassign). This is the same manual path that existed before.
+Sessions stay attributed to **Unknown Juggler** until FaceID provides a label.
+The score and replay are still saved. Once the FaceID label is corrected, use
+**Queue & Reprocess** on the archived clip; the tracker reuses the latest label
+it received for that Frigate event when processing the clip again.
 
 ### MQTT topic format (FaceID publishes)
 
