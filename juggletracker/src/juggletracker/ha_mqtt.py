@@ -102,15 +102,13 @@ class HAPublisher:
         # Inbox/processed queue sensors + reprocess-a-clip control.
         self.reprocess_topic = f"{self.node}/reprocess/set"
         self.reprocess_select_topic = f"{self.node}/reprocess_select/set"
-        # "Annotate on reprocess" switch: when ON, a reprocess also writes a
-        # browser-playable annotated replay (overlay drawn in the same detection
-        # pass — no extra inference). The live value is remembered here and
-        # captured per-clip at button-press time; it resets to the config
-        # default on restart (like the calibration numbers).
-        self.reprocess_annotate_topic = f"{self.node}/reprocess_annotate/set"
-        self._reprocess_annotate = bool(
-            self.cfg.capture.get("reprocess_annotate_default", False)
-        )
+        # Global annotation switch: its live state is consulted for every clip
+        # the inbox watcher starts processing, including reprocesses.
+        self.annotate_processed_topic = f"{self.node}/annotate_processed/set"
+        self.annotate_processed = bool(self.cfg.capture.get(
+            "annotate_processed_default",
+            self.cfg.capture.get("reprocess_annotate_default", False),
+        ))
         self._reprocess_selected: Optional[str] = None
         self._last_select_options: Optional[list] = None
         # Delete-a-clip-from-the-inbox control. Deleting the clip that is
@@ -129,7 +127,7 @@ class HAPublisher:
             self.cfg.capture.get("reprocess_thumbnail_seconds", 2.0))
         self.client.subscribe(self.reprocess_topic)
         self.client.subscribe(self.reprocess_select_topic)
-        self.client.subscribe(self.reprocess_annotate_topic)
+        self.client.subscribe(self.annotate_processed_topic)
         self.client.subscribe(self.inbox_select_topic)
         self.client.subscribe(self.delete_topic)
         self.client.subscribe(self.thumb_seconds_topic)
@@ -264,11 +262,11 @@ class HAPublisher:
                                     payload or SELECT_NONE, retain=True)
                 # Refresh the preview thumbnail for the newly selected clip.
                 self._update_reprocess_thumb()
-            elif topic == self.reprocess_annotate_topic:
-                self._reprocess_annotate = payload.upper() in ("ON", "1", "TRUE")
+            elif topic == self.annotate_processed_topic:
+                self.annotate_processed = payload.upper() in ("ON", "1", "TRUE")
                 self.client.publish(
-                    f"{self.node}/reprocess_annotate",
-                    "ON" if self._reprocess_annotate else "OFF", retain=True)
+                    f"{self.node}/annotate_processed",
+                    "ON" if self.annotate_processed else "OFF", retain=True)
             elif topic == self.inbox_select_topic:
                 self._inbox_selected = (
                     None if (not payload or payload == SELECT_NONE) else payload
@@ -659,33 +657,37 @@ class HAPublisher:
                 "availability_topic": self.avail_topic,
                 "device": dev,
             }), retain=True)
-        # "Annotate on reprocess" toggle (renders as a checkbox/switch in HA).
+        # Retire the previous reprocess-only switch discovery entity.
         self.client.publish(
             f"{self.prefix}/switch/{self.node}/reprocess_annotate/config",
+            "", retain=True)
+        # Global annotation switch for every processed clip.
+        self.client.publish(
+            f"{self.prefix}/switch/{self.node}/annotate_processed/config",
             json.dumps({
-                "name": "Annotate On Reprocess",
-                "unique_id": f"{self.node}_reprocess_annotate",
-                "state_topic": f"{self.node}/reprocess_annotate",
-                "command_topic": self.reprocess_annotate_topic,
+                "name": "Annotate Processed Clips",
+                "unique_id": f"{self.node}_annotate_processed",
+                "state_topic": f"{self.node}/annotate_processed",
+                "command_topic": self.annotate_processed_topic,
                 "payload_on": "ON", "payload_off": "OFF",
                 "icon": "mdi:draw",
                 "entity_category": "config",
                 "availability_topic": self.avail_topic,
                 "device": dev,
             }), retain=True)
-        # Seed the toggle state so HA reflects the worker's current (default)
-        # value after a restart.
+        # Seed the global toggle state so HA reflects the worker's current
+        # configured value after a restart.
         self.client.publish(
-            f"{self.node}/reprocess_annotate",
-            "ON" if self._reprocess_annotate else "OFF", retain=True)
-        # Sensor exposing the most recent forced-annotated reprocess replay
+            f"{self.node}/annotate_processed",
+            "ON" if self.annotate_processed else "OFF", retain=True)
+        # Sensor exposing the most recent annotated clip replay
         # (name in state, video_url in attributes). We deliberately do NOT seed
         # an empty value here, so a prior replay URL (retained on the broker)
         # survives a worker restart.
         self.client.publish(
             f"{self.prefix}/sensor/{self.node}/last_reprocessed/config",
             json.dumps({
-                "name": "Juggle Last Reprocessed",
+                "name": "Juggle Last Annotated Clip",
                 "unique_id": f"{self.node}_last_reprocessed",
                 "state_topic": f"{self.node}/last_reprocessed",
                 "value_template": "{{ value_json.name | default('none') }}",
@@ -863,17 +865,9 @@ class HAPublisher:
             os.makedirs(inbox, exist_ok=True)
             dst = os.path.join(inbox, name)
             shutil.copy2(src, dst)
-            # Capture the "annotate this run" intent NOW (at button press) via a
-            # sidecar marker the watcher consumes, so toggling the switch after
-            # pressing can't change an already-queued job.
             note = ""
-            if self._reprocess_annotate:
-                try:
-                    with open(dst + ".annotate", "w", encoding="utf-8") as fh:
-                        fh.write("1")
-                    note = " (annotated replay)"
-                except OSError as exc:
-                    note = f" (annotate marker failed: {exc})"
+            if self.annotate_processed:
+                note = " (annotated replay enabled)"
             print(f"  [reprocess] {name} -> inbox{note}; will re-run with "
                   f"current config", flush=True)
             self.publish_queues()  # reflect the move immediately
@@ -882,7 +876,7 @@ class HAPublisher:
             # (annotated) or stays hidden for a non-annotated run (which
             # produces no replay). publish_last_reprocessed() restores a real
             # URL when an annotated run finishes.
-            self.publish_reprocess_pending(name, self._reprocess_annotate)
+            self.publish_reprocess_pending(name, self.annotate_processed)
             # Reset the dropdown to "(none)" so the UI doesn't keep showing the
             # now-requeued (and no-longer-listed) file as the selection.
             self._reprocess_selected = None
@@ -896,9 +890,8 @@ class HAPublisher:
         """Delete the selected inbox clip.
 
         If it is the clip currently being processed, ask the worker to cancel
-        the in-flight run — the watcher then removes the file (and its marker)
-        once the loop aborts. Otherwise the queued clip and its `.annotate`
-        sidecar are removed here immediately."""
+        the in-flight run — the watcher then removes the file once the loop
+        aborts. Otherwise the queued clip is removed here immediately."""
         sel = self._inbox_selected
         if not sel or sel == SELECT_NONE:
             print("  [delete] no inbox clip selected", flush=True)
@@ -915,7 +908,7 @@ class HAPublisher:
 
         if cancelled:
             # In flight: the frame loop is still reading the file, so let the
-            # watcher delete it (+ marker + partial temp) after it aborts.
+            # watcher delete it (+ partial temp) after it aborts.
             print(f"  [delete] {name} is processing -> requested cancel",
                   flush=True)
         else:
@@ -1291,7 +1284,7 @@ class HAPublisher:
     def publish_last_reprocessed(self, clip_name: str,
                                  ts: Optional[float] = None,
                                  annotated: bool = True) -> None:
-        """Publish the URL of the most recent forced-annotated reprocess replay.
+        """Publish the URL of the most recent annotated clip replay.
 
         One overwritten file (<highscore_dir>/last_reprocessed.mp4) served by HA
         at /local/juggle/last_reprocessed.mp4. The ``?v=`` cache-buster forces

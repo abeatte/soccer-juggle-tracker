@@ -357,8 +357,8 @@ reprocess control:
 | `sensor.juggle_last_processed` | Filename and summary of the most recently completed clip |
 | `select.juggle_reprocess_file` | Dropdown of processed filenames (refreshed each cycle) |
 | `button.reprocess_selected_clip` | Re-runs the selected clip |
-| `switch.juggle_annotate_on_reprocess` | When ON, the next reprocess also writes a viewable annotated replay |
-| `sensor.juggle_last_reprocessed` | Name of the last annotated reprocess (state) + `video_url` attribute |
+| `switch.juggle_annotate_processed_clips` | When ON, every incoming or reprocessed clip writes a viewable annotated replay |
+| `sensor.juggle_last_reprocessed` | Name of the last annotated clip (state) + `video_url` attribute |
 
 **Reprocess** moves the chosen processed clip back into the inbox, so the normal
 watcher re-runs it **end-to-end with the current (possibly just-calibrated)
@@ -366,15 +366,16 @@ config** — taking every action a fresh run does (updating high scores, writing
 the replay video, publishing to HA). Pick a file in the select, then press the
 button.
 
-**Annotate On Reprocess** (checkbox): flip this ON *before* pressing Reprocess to
-also get a full annotated replay of that clip — ball/pose/streak overlay, ROI
-border, ground line — regardless of whether it beats a record. The overlay is
-drawn in the same detection pass (no second inference run — just one extra
-ffmpeg transcode), so it's cheap enough for this box. The result overwrites a
-single file, `last_reprocessed.mp4`, and its URL lands on
-`sensor.juggle_last_reprocessed`. The toggle is captured at button-press time,
-so changing it afterwards won't affect an already-queued clip, and it resets to
-`capture.reprocess_annotate_default` on restart.
+**Annotate Processed Clips**: when ON, every clip processed by the inbox worker
+gets a full annotated replay — whether it arrived normally or was selected for
+reprocessing — with ball/pose/streak overlay, ROI border, and ground line. The
+overlay is drawn in the same detection pass (no second inference run; encoding
+and video output add some processing time). Reprocessed clips overwrite the
+single file `last_reprocessed.mp4` on each annotated run, and its URL lands on
+`sensor.juggle_last_reprocessed`; that sensor reflects the latest annotated
+clip, whether it was new or reprocessed. The switch defaults to
+`capture.annotate_processed_default` on worker restart; if unset, the former
+`capture.reprocess_annotate_default` value is used for backward compatibility.
 
 Dashboard example (verify device-prefixed IDs in Developer Tools → States):
 
@@ -388,7 +389,7 @@ entities:
   - entity: sensor.juggle_last_processed
   - type: divider
   - entity: select.juggle_reprocess_file
-  - entity: switch.juggle_annotate_on_reprocess
+  - entity: switch.juggle_annotate_processed_clips
   - entity: button.reprocess_selected_clip
 ```
 
@@ -405,7 +406,7 @@ entities:
 card:
   type: iframe
   aspect_ratio: 56%
-  title: 🎬 Last Annotated Reprocess
+  title: 🎬 Last Annotated Clip
   url: >-
     ${ states['sensor.juggle_last_reprocessed'].attributes.video_url }
 visibility:

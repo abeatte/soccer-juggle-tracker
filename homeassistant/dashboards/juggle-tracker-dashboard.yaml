@@ -15,8 +15,8 @@
 #     run if the selected clip is the one being processed)
 #   * Reassign High Score (From/To person dropdowns + Reassign button — moves a
 #     misattributed record, e.g. an Unknown Juggler score that was really a kid)
-#   * Queue & Reprocess (inbox/processed counts, reprocess file + annotate switch)
-#   * Last Annotated Reprocess replay (3 ANDed visibility conditions)
+#   * Queue & Reprocess (inbox/processed counts, reprocess file + global annotation switch)
+#   * Last Annotated Clip replay (3 ANDed visibility conditions)
 #
 # Notes / gotchas (see docs/HOME_ASSISTANT.md and the learned conventions):
 #   * All worker entities are prefixed `front_yard_soccer_juggle_tracker_` by HA

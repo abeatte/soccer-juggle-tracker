@@ -27,7 +27,7 @@ capture:
   save_highscore_video: true
   annotate_highscore: true
   processed_retention_days: 14 # 0 = keep forever (default)
-  reprocess_annotate_default: true  # default "annotate" toggle when reprocessing via HA
+  annotate_processed_default: false # annotate all incoming and reprocessed clips
   reprocess_thumbnail_seconds: 2.0   # seek offset (s) for the reprocess thumbnail preview
 
 # Region of interest in the frame, as fractions [0-1]: x0,y0,x1,y1.

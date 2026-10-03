@@ -62,30 +62,24 @@ def _watch(args) -> int:
                 # Wait until the file stops growing (finished recording).
                 if not _is_stable(clip):
                     continue
-                # A sidecar '<clip>.annotate' marker (dropped by an HA reprocess
-                # with the "Annotate On Reprocess" switch on) forces a viewable
-                # annotated replay for this clip.
+                # Apply the global HA annotation setting to every clip, whether
+                # it arrived normally or was copied back for reprocessing.
                 marker = clip + ".annotate"
-                annotate = os.path.exists(marker)
+                annotate = pipe.ha.annotate_processed
                 print(f"\n-> {os.path.basename(clip)}"
                       f"{'  [annotated replay]' if annotate else ''}")
                 try:
-                    if annotate:
-                        res = pipe.process_annotated_viewable(clip)
-                    else:
-                        res = pipe.process(clip)
+                    res = _process_inbox_clip(pipe, clip, annotate)
                     for s in res.streaks:
                         print(f"   {s['person']}: {s['count']} ({s['reason']})")
                     dst = move_to_processed(cfg, clip)
                     # Surface the just-finished clip in HA (live queue progress).
                     pipe.ha.publish_last_processed(dst, res.streaks)
-                    # Drop the marker only after the clip is handled + moved, so
-                    # a mid-run crash re-annotates on the retry.
-                    if annotate:
-                        try:
-                            os.remove(marker)
-                        except OSError:
-                            pass
+                    # Remove a legacy marker left by a pre-upgrade queued clip.
+                    try:
+                        os.remove(marker)
+                    except OSError:
+                        pass
                 except ClipCancelled:
                     # Operator deleted the in-flight clip via HA: remove it and
                     # its marker instead of archiving. process() already rolled
@@ -273,6 +267,13 @@ def _json_meta(clip: str, frame_height: int, fps: float) -> str:
     return json.dumps({"meta": {"clip": os.path.basename(clip),
                                 "frame_height": int(frame_height),
                                 "fps": float(fps)}})
+
+
+def _process_inbox_clip(pipe, clip, annotate):
+    """Process one inbox clip using its captured global annotation state."""
+    if annotate:
+        return pipe.process_annotated_viewable(clip)
+    return pipe.process(clip)
 
 
 def _bench(args) -> int:
