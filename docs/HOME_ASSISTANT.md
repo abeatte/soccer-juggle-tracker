@@ -360,11 +360,10 @@ reprocess control:
 | `sensor.juggle_inbox_queue` | Count of clips waiting in the inbox (state), with a `files` attribute listing them |
 | `sensor.juggle_processed_count` | Count of already-processed clips (state) + `files` attribute (newest first, capped at 100) |
 | `sensor.juggle_last_processed_person` | Person attributed to the most recently completed clip; updates if FaceID identifies it later |
-| `sensor.juggle_last_processed` | Filename and summary of the most recently completed clip |
+| `sensor.juggle_last_processed` | Filename, result summary, replay URL, and `annotated` flag for the most recently completed clip |
 | `select.juggle_reprocess_file` | Dropdown of processed filenames (refreshed each cycle) |
 | `button.reprocess_selected_clip` | Re-runs the selected clip |
 | `switch.juggle_annotate_processed_clips` | When ON, every incoming or reprocessed clip writes a viewable annotated replay |
-| `sensor.juggle_last_reprocessed` | Name of the last annotated clip (state) + `video_url` attribute |
 
 **Reprocess** moves the chosen processed clip back into the inbox, so the normal
 watcher re-runs it **end-to-end with the current (possibly just-calibrated)
@@ -372,16 +371,16 @@ config** — taking every action a fresh run does (updating high scores, writing
 the replay video, publishing to HA). Pick a file in the select, then press the
 button.
 
-**Annotate Processed Clips**: when ON, every clip processed by the inbox worker
-gets a full annotated replay — whether it arrived normally or was selected for
-reprocessing — with ball/pose/streak overlay, ROI border, and ground line. The
-overlay is drawn in the same detection pass (no second inference run; encoding
-and video output add some processing time). Reprocessed clips overwrite the
-single file `last_reprocessed.mp4` on each annotated run, and its URL lands on
-`sensor.juggle_last_reprocessed`; that sensor reflects the latest annotated
-clip, whether it was new or reprocessed. The switch defaults to
-`capture.annotate_processed_default` on worker restart; if unset, the former
-`capture.reprocess_annotate_default` value is used for backward compatibility.
+**Annotate Processed Clips**: the same live ON/OFF setting is read by the inbox
+worker for every clip, whether it arrived normally or was copied back for
+reprocessing. When ON, it writes the ball/pose/streak overlay, ROI border, and
+ground line during the detection pass (no second inference run; encoding and
+video output add some processing time). All completed clips update
+`sensor.juggle_last_processed`: its `annotated` attribute indicates whether the
+video URL points to the rendered overlay (`last_processed.mp4`) or the archived
+source clip. The switch initializes from `capture.annotate_processed_default`
+on worker restart; if unset, the former `capture.reprocess_annotate_default`
+value is used for backward compatibility.
 
 Dashboard example (verify device-prefixed IDs in Developer Tools → States):
 
@@ -399,45 +398,21 @@ entities:
   - entity: button.reprocess_selected_clip
 ```
 
-Show the annotated replay in its own window. Use `config-template-card` (HACS)
-so the iframe URL comes from the sensor's `video_url` attribute — this both
-hides it until a reprocess has produced a clip and picks up the `?v=`
-cache-buster so an overwritten replay actually reloads (a plain `iframe` with a
-fixed URL would show the cached/old clip):
+Show the latest replay from the same `last_processed` sensor. Its `video_url`
+attribute includes a cache-buster so overwritten annotated output reloads:
 
 ```yaml
-type: custom:config-template-card
-entities:
-  - sensor.juggle_last_reprocessed
-card:
-  type: iframe
-  aspect_ratio: 56%
-  title: 🎬 Last Annotated Clip
-  url: >-
-    ${ states['sensor.juggle_last_reprocessed'].attributes.video_url }
-visibility:
-  - condition: state
-    entity: sensor.juggle_last_reprocessed
-    state_not: unknown
-  - condition: state
-    entity: sensor.juggle_last_reprocessed
-    state_not: unavailable
-  - condition: state
-    entity: sensor.juggle_last_reprocessed
-    attribute: video_url
-    state_not: ""
+type: markdown
+title: 🎬 Last Processed Clip
+content: >-
+  {% set k = states['sensor.juggle_last_processed'] %}
+  {% if k %}{% set u = k.attributes.get('video_url') %}
+  {% if u %}<video controls preload="metadata" width="100%" src="{{ u }}"></video>{% endif %}{% endif %}
 ```
 
-> `last_reprocessed` isn't seeded on startup, so before the **first** reprocess
-> the sensor is `unknown` and its `video_url` attribute is absent — the two
-> `state_not` guards hide the card until then. Once a reprocess has run the
-> worker keeps `video_url` **always present**: it publishes `""` the moment a
-> clip is queued (so the card hides while an annotated run is in flight, and
-> stays hidden for an annotate-off run that produces no replay) and the real
-> URL when an annotated run finishes. That's why the third condition —
-> `attribute: video_url, state_not: ""` — is the one that actually shows the
-> card only when a fresh replay exists. All three are ANDed (each `state_not`
-> is a single string; a YAML list under one `state_not` is rejected by HA).
+The worker clears `video_url` when a reprocess is queued and republishes it when
+the run completes. For annotate-off clips with unsupported source codecs, no
+inline browser-playable URL is available.
 
 List the actual inbox filenames with a Markdown card reading the attribute:
 

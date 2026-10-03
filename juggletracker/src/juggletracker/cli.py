@@ -74,7 +74,8 @@ def _watch(args) -> int:
                         print(f"   {s['person']}: {s['count']} ({s['reason']})")
                     dst = move_to_processed(cfg, clip)
                     # Surface the just-finished clip in HA (live queue progress).
-                    pipe.ha.publish_last_processed(dst, res.streaks)
+                    pipe.ha.publish_last_processed(
+                        dst, res.streaks, annotated=res.annotated)
                     # Remove a legacy marker left by a pre-upgrade queued clip.
                     try:
                         os.remove(marker)

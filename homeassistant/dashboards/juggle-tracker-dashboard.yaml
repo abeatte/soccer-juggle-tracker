@@ -202,9 +202,9 @@ sections:
       - type: markdown
         content: >
           {% set k =
-          states['sensor.front_yard_soccer_juggle_tracker_juggle_last_processed']
+          states['sensor.soccer_juggle_tracker_juggle_last_processed']
           %} {% if k %}{% set u = k.attributes.get('video_url') %}**{{ k.state
-          }}** — best {{ k.attributes.get('best', 0) }} ({{
+          }}**{% if k.attributes.get('annotated') %} · annotated{% endif %} — best {{ k.attributes.get('best', 0) }} ({{
           k.attributes.get('attempts', 0) }} attempts){% if u %}
 
           <video controls preload="metadata" width="100%" src="{{ u
@@ -214,10 +214,10 @@ sections:
         title: 🎬 Last Processed Clip
         visibility:
           - condition: state
-            entity: sensor.front_yard_soccer_juggle_tracker_juggle_last_processed
+            entity: sensor.soccer_juggle_tracker_juggle_last_processed
             state_not: unknown
           - condition: state
-            entity: sensor.front_yard_soccer_juggle_tracker_juggle_last_processed
+            entity: sensor.soccer_juggle_tracker_juggle_last_processed
             state_not: unavailable
           - condition: user
             users:
@@ -522,24 +522,6 @@ sections:
         state_not: ""
   - type: grid
     cards:
-      - type: markdown
-        content: >-
-          {% set u =
-          state_attr('sensor.front_yard_soccer_juggle_tracker_juggle_last_reprocessed','video_url')
-          %} {% if u %}<video controls preload="metadata" width="100%" src="{{ u
-          }}"></video>{% else %}No replay yet{% endif %}
-        title: 🎬 Last Clip Reprocessed
-        visibility:
-          - condition: state
-            entity: sensor.front_yard_soccer_juggle_tracker_juggle_last_reprocessed
-            state_not: unknown
-          - condition: state
-            entity: sensor.front_yard_soccer_juggle_tracker_juggle_last_reprocessed
-            state_not: unavailable
-          - condition: state
-            attribute: video_url
-            entity: sensor.front_yard_soccer_juggle_tracker_juggle_last_reprocessed
-            state_not: ""
       - type: vertical-stack
         cards:
           - type: entities

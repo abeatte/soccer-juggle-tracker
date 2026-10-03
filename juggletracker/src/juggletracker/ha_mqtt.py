@@ -676,22 +676,12 @@ class HAPublisher:
         self.client.publish(
             f"{self.node}/annotate_processed",
             "ON" if self.annotate_processed else "OFF", retain=True)
-        # Sensor exposing the most recent annotated clip replay
-        # (name in state, video_url in attributes). We deliberately do NOT seed
-        # an empty value here, so a prior replay URL (retained on the broker)
-        # survives a worker restart.
+        # Retire the standalone annotated-clip sensor; all clip results now
+        # publish through last_processed.
         self.client.publish(
             f"{self.prefix}/sensor/{self.node}/last_reprocessed/config",
-            json.dumps({
-                "name": "Juggle Last Annotated Clip",
-                "unique_id": f"{self.node}_last_reprocessed",
-                "state_topic": f"{self.node}/last_reprocessed",
-                "value_template": "{{ value_json.name | default('none') }}",
-                "json_attributes_topic": f"{self.node}/last_reprocessed",
-                "icon": "mdi:movie-open-play",
-                "availability_topic": self.avail_topic,
-                "device": dev,
-            }), retain=True)
+            "", retain=True)
+        self.client.publish(f"{self.node}/last_reprocessed", "", retain=True)
         # Start the reprocess dropdown with a clean (nothing-selected) state.
         self.client.publish(f"{self.node}/reprocess_select", SELECT_NONE,
                             retain=True)
@@ -885,12 +875,9 @@ class HAPublisher:
             print(f"  [reprocess] {name} -> inbox{note}; will re-run with "
                   f"current config", flush=True)
             self.publish_queues()  # reflect the move immediately
-            # Clear the last-reprocessed replay for this new run so a card
-            # guarded on `video_url != ""` hides while the run is in flight
-            # (annotated) or stays hidden for a non-annotated run (which
-            # produces no replay). publish_last_reprocessed() restores a real
-            # URL when an annotated run finishes.
-            self.publish_reprocess_pending(name, self.annotate_processed)
+            # Clear the last-processed replay while this run is in flight;
+            # completion publishes either the annotated output or source clip.
+            self.publish_last_processed_pending(name, self.annotate_processed)
             # Reset the dropdown to "(none)" so the UI doesn't keep showing the
             # now-requeued (and no-longer-listed) file as the selection.
             self._reprocess_selected = None
@@ -1038,47 +1025,28 @@ class HAPublisher:
             f"{self.node}/reprocess_thumb", json.dumps(payload), retain=True)
         print(f"  [preview] {name} -> {url}", flush=True)
 
-    def publish_reprocess_pending(self, clip_name: str,
-                                  annotated: bool) -> None:
-        """Announce that a reprocess was just queued, clearing the replay URL.
-
-        Published with an empty ``video_url`` (retained) so an HA card guarded on
-        ``video_url != ""`` hides while an annotated run is in flight, and stays
-        hidden for a non-annotated run (which produces no replay — so the last
-        reprocess no longer misrepresents itself with a stale clip).
-        :meth:`publish_last_reprocessed` restores a real URL when an annotated
-        run completes. Keeping ``video_url`` always present (``""`` or a URL)
-        after the first reprocess is what makes the attribute-based visibility
-        guard reliable."""
+    def publish_last_processed_pending(self, clip_name: str,
+                                       annotated: bool) -> None:
+        """Clear the last-processed video URL while a reprocess is running."""
         if not self.enabled:
             return
+        payload = {
+            "name": os.path.basename(clip_name),
+            "video_url": "",
+            "attributed_to": "",
+            "annotated": annotated,
+            "processing": True,
+            "ts": int(time.time()),
+        }
+        self._last_processed_event_id = None
+        self._last_processed_payload = payload
         self.client.publish(
-            f"{self.node}/last_reprocessed",
-            json.dumps({"name": os.path.basename(clip_name), "video_url": "",
-                        "annotated": annotated, "processing": annotated,
-                        "ts": int(time.time())}),
-            retain=True)
-
-    def publish_last_reprocessed(self, clip_name: str,
-                                 ts: Optional[float] = None,
-                                 annotated: bool = True) -> None:
-        """Publish the URL of the most recent annotated clip replay.
-
-        One overwritten file (<highscore_dir>/last_reprocessed.mp4) served by HA
-        at /local/juggle/last_reprocessed.mp4. The ``?v=`` cache-buster forces
-        the browser to reload the overwritten file each time."""
-        if not self.enabled:
-            return
-        ver = int(ts or time.time())
-        url = f"{self.media_base.rstrip('/')}/last_reprocessed.mp4?v={ver}"
-        self.client.publish(
-            f"{self.node}/last_reprocessed",
-            json.dumps({"name": os.path.basename(clip_name), "video_url": url,
-                        "annotated": annotated, "ts": ver}),
+            f"{self.node}/last_processed", json.dumps(payload),
             retain=True)
 
     def publish_last_processed(self, clip_path: str,
-                               results: list[dict]) -> None:
+                               results: list[dict],
+                               annotated: bool = False) -> None:
         """Publish the latest processed clip and its browser-playable URL."""
         if not self.enabled:
             return
@@ -1089,11 +1057,19 @@ class HAPublisher:
             for item in results if item.get("person")
         ))
         counts = [int(item.get("count", 0)) for item in results]
-        codec = self._probe_codec(clip_path) if os.path.isfile(clip_path) else None
         url = ""
-        if codec == "h264" and filename.lower().endswith(".mp4"):
+        ver = int(time.time())
+        annotated_file = os.path.join(
+            self.cfg.capture.get("highscore_dir", "highscores"),
+            "last_processed.mp4",
+        )
+        has_annotated_file = annotated and os.path.isfile(annotated_file)
+        if has_annotated_file:
+            url = f"{self.media_base.rstrip('/')}/last_processed.mp4?v={ver}"
+        elif (self._probe_codec(clip_path) == "h264"
+              and filename.lower().endswith(".mp4")):
             media_root = self.media_base.rstrip("/").rsplit("/", 1)[0]
-            url = f"{media_root}/processed/{quote(filename, safe='')}?v={int(time.time())}"
+            url = f"{media_root}/processed/{quote(filename, safe='')}?v={ver}"
         if (event_id and self._recent_faceid_attribution
                 and self._recent_faceid_attribution[0] == event_id):
             people = [self._recent_faceid_attribution[1]]
@@ -1104,7 +1080,9 @@ class HAPublisher:
             "best": max(counts, default=0),
             "attempts": len(results),
             "attributed_to": ", ".join(people),
-            "ts": int(time.time()),
+            "annotated": has_annotated_file,
+            "processing": False,
+            "ts": ver,
         }
         self._last_processed_event_id = event_id
         self._last_processed_payload = payload

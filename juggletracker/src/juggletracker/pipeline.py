@@ -47,6 +47,7 @@ class ClipResult:
     frames: int
     streaks: list[dict]
     new_high_scores: list[dict]
+    annotated: bool = False
 
 
 def _nearest_person_to_ball(persons, ball_xy):
@@ -410,12 +411,13 @@ class Pipeline:
         ``debug_video`` output of :meth:`process`), which now encodes H.264
         directly through an ffmpeg pipe — so this costs NO extra transcode and
         NOT a second inference pass. The result is written to a single
-        overwritten file (<highscore_dir>/last_reprocessed.mp4) and its URL is
-        published to HA (sensor.juggle_last_reprocessed)."""
+        overwritten file (<highscore_dir>/last_processed.mp4). The watcher
+        publishes it through the unified last_processed sensor after archiving
+        the source clip."""
         hs_dir = self.cfg.capture.get("highscore_dir", "highscores")
         os.makedirs(hs_dir, exist_ok=True)
         ts = time.time()
-        final = os.path.join(hs_dir, "last_reprocessed.mp4")
+        final = os.path.join(hs_dir, "last_processed.mp4")
         stage = os.path.join(hs_dir, f".reproc_{int(ts)}.mp4")
         # process() draws the overlay straight to `stage` as browser-playable
         # H.264 (via _FfmpegH264Writer) as it runs.
@@ -428,7 +430,7 @@ class Pipeline:
             raise
         if os.path.exists(stage) and os.path.getsize(stage) > 0:
             os.replace(stage, final)  # atomic overwrite of the single file
-            self.ha.publish_last_reprocessed(clip_path, ts)
+            res.annotated = True
             print(f"  [reprocess] annotated replay -> {final}", flush=True)
         else:
             # No overlay frames (empty clip / encode failed): hide the card.
@@ -436,7 +438,6 @@ class Pipeline:
                 os.remove(stage)
             print("  [reprocess] no overlay frames written (empty clip?)",
                   flush=True)
-            self.ha.publish_reprocess_pending(clip_path, annotated=False)
         return res
 
     def _record(self, session_id, track_id, event, streaks, new_highs) -> None:
