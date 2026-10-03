@@ -262,6 +262,10 @@ class HAPublisher:
         """Route inbound MQTT commands (reset / calibration set / apply / revert)."""
         try:
             topic = msg.topic
+            if (self._faceid_enabled and topic.startswith("frigate/")
+                    and "/person/" in topic):
+                self._on_faceid_event(topic, msg.payload)
+                return
             payload = msg.payload.decode().strip()
             if topic == self.cmd_topic:
                 if payload:
@@ -290,9 +294,6 @@ class HAPublisher:
                                     payload or SELECT_NONE, retain=True)
             elif topic == self.delete_topic:
                 self._do_delete_inbox()
-            elif self._faceid_enabled and topic.startswith("frigate/") and "/person/" in topic:
-                # FaceID sub_label event: frigate/<camera>/person/<event_id>
-                self._on_faceid_event(topic, msg.payload)
             elif not self.calib_enabled:
                 return
             elif topic == self.apply_topic:
