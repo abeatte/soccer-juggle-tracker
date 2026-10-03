@@ -107,7 +107,7 @@ home_assistant:
   mqtt_user: "mqtt_user"
   mqtt_password: <password>
   discovery_prefix: "homeassistant"   # HA MQTT discovery topic root
-  node_id: "juggle_tracker"
+  node_id: "front_yard_soccer_juggle_tracker"
   media_base_url: "http://<HA_IP>:8123/local/juggle"
   faceid_enabled: true  # subscribe to Frigate sub_label events for async person attribution
 

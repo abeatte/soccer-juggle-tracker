@@ -85,6 +85,27 @@ def test_reassign_unknown_person_id_returns_none(tmp_path):
     assert reassign_current_high(db.conn, 999999, real) is None
 
 
+def test_clip_attributions_uses_latest_session_for_basename(tmp_path):
+    db = _db(tmp_path)
+    unknown = db.unknown_person_id
+    artie = db.add_person("Artie")
+    old_session = db.start_session("/inbox/clip_cam_event.mp4", 25.0)
+    db.record_attempt(old_session, unknown, 1, 12, "end")
+    latest_session = db.start_session("/other/clip_cam_event.mp4", 25.0)
+    db.record_attempt(latest_session, artie, 2, 18, "ground")
+
+    assert db.clip_attributions(["clip_cam_event.mp4", "not_processed.mp4"]) == {
+        "clip_cam_event.mp4": ["Artie"]
+    }
+
+
+def test_clip_attributions_reports_session_with_no_attempts(tmp_path):
+    db = _db(tmp_path)
+    db.start_session("/processed/quiet_clip.mp4", 25.0)
+
+    assert db.clip_attributions(["quiet_clip.mp4"]) == {"quiet_clip.mp4": []}
+
+
 def test_reassign_ties_break_to_most_recent_clip(tmp_path):
     """When the source has two attempts tied at its max, the most recent one is
     the one moved (its clip is the freshest)."""

@@ -237,6 +237,39 @@ class Database:
         )
         self.conn.commit()
 
+    def clip_attributions(self, clip_names: Iterable[str]) -> dict[str, list[str]]:
+        """Return the latest session's attributed people for each clip basename."""
+        wanted = {os.path.basename(name) for name in clip_names}
+        if not wanted:
+            return {}
+
+        latest: dict[str, int] = {}
+        for row in self.conn.execute(
+            "SELECT id, clip_path FROM sessions ORDER BY started_at DESC, id DESC"
+        ):
+            name = os.path.basename(row["clip_path"])
+            if name in wanted and name not in latest:
+                latest[name] = int(row["id"])
+
+        if not latest:
+            return {}
+        placeholders = ",".join("?" for _ in latest)
+        rows = self.conn.execute(
+            "SELECT DISTINCT a.session_id, COALESCE(p.name, ?) AS person "
+            "FROM attempts a LEFT JOIN people p ON p.id = a.person_id "
+            f"WHERE a.session_id IN ({placeholders}) ORDER BY person",
+            [UNKNOWN_NAME, *latest.values()],
+        )
+        people_by_session: dict[int, list[str]] = {
+            session_id: [] for session_id in latest.values()
+        }
+        for row in rows:
+            people_by_session[int(row["session_id"])].append(str(row["person"]))
+        return {
+            name: people_by_session[session_id]
+            for name, session_id in latest.items()
+        }
+
     def abort_session(self, session_id: int) -> None:
         """Discard a session and everything it recorded.
 

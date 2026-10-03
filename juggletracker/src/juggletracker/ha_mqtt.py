@@ -42,6 +42,27 @@ def _slug(name: str) -> str:
     return re.sub(r"[^a-z0-9_]+", "_", name.strip().lower()).strip("_")
 
 
+def _build_reprocess_options(
+    filenames: list[str], attributions: dict[str, list[str]],
+) -> tuple[list[str], dict[str, str], dict[str, str]]:
+    """Build selector labels and maps between each label and its filename."""
+    options = [SELECT_NONE]
+    option_to_filename: dict[str, str] = {}
+    filename_to_option: dict[str, str] = {}
+    for filename in filenames:
+        if filename not in attributions:
+            person = "no session"
+        elif attributions[filename]:
+            person = ", ".join(attributions[filename])
+        else:
+            person = "no juggle attempts"
+        option = f"{person} | {filename}"
+        options.append(option)
+        option_to_filename[option] = filename
+        filename_to_option[filename] = option
+    return options, option_to_filename, filename_to_option
+
+
 class HAPublisher:
     def __init__(self, cfg):
         self.cfg = cfg
@@ -111,6 +132,9 @@ class HAPublisher:
         ))
         self._reprocess_selected: Optional[str] = None
         self._last_select_options: Optional[list] = None
+        self._reprocess_option_to_filename: dict[str, str] = {}
+        self._reprocess_filename_to_option: dict[str, str] = {}
+        self._reprocess_attributions: dict[str, list[str]] = {}
         # Delete-a-clip-from-the-inbox control. Deleting the clip that is
         # currently being processed also cancels the in-flight run.
         self.inbox_select_topic = f"{self.node}/inbox_select/set"
@@ -120,17 +144,11 @@ class HAPublisher:
         # Back-reference to the Pipeline (set via bind_worker); used to cancel
         # the in-flight clip when the operator deletes the file being processed.
         self._worker = None
-        # Preview thumbnail for the selected reprocess clip (grabbed on select).
-        # Live-editable grab time (no restart), seeded from config.
-        self.thumb_seconds_topic = f"{self.node}/thumb_seconds/set"
-        self._thumb_seconds = float(
-            self.cfg.capture.get("reprocess_thumbnail_seconds", 2.0))
         self.client.subscribe(self.reprocess_topic)
         self.client.subscribe(self.reprocess_select_topic)
         self.client.subscribe(self.annotate_processed_topic)
         self.client.subscribe(self.inbox_select_topic)
         self.client.subscribe(self.delete_topic)
-        self.client.subscribe(self.thumb_seconds_topic)
         # Reassign-a-high-score control: move one person's CURRENT high score
         # (and its replay clip) to another person — e.g. an "Unknown Juggler"
         # record that was actually your kid. Two `select`s (source/target
@@ -182,6 +200,7 @@ class HAPublisher:
         """Attach the Pipeline so inbound commands can reach into a running clip
         (used by the inbox-delete handler to cancel the in-flight file)."""
         self._worker = worker
+        self.publish_queues()
 
     def announce_person(self, name: str) -> None:
         """Publish MQTT discovery config for a person's high-score sensor."""
@@ -255,13 +274,14 @@ class HAPublisher:
             elif topic == self.reprocess_topic:
                 self._do_reprocess()
             elif topic == self.reprocess_select_topic:
-                self._reprocess_selected = (
-                    None if (not payload or payload == SELECT_NONE) else payload
-                )
+                filename = self._reprocess_option_to_filename.get(payload)
+                if filename is None and payload in self._reprocess_filename_to_option:
+                    filename = payload  # Accept retained filename values from older clients.
+                self._reprocess_selected = filename
                 self.client.publish(f"{self.node}/reprocess_select",
-                                    payload or SELECT_NONE, retain=True)
-                # Refresh the preview thumbnail for the newly selected clip.
-                self._update_reprocess_thumb()
+                                    self._reprocess_filename_to_option.get(
+                                        filename, SELECT_NONE), retain=True)
+                self._update_reprocess_preview()
             elif topic == self.annotate_processed_topic:
                 self.annotate_processed = payload.upper() in ("ON", "1", "TRUE")
                 self.client.publish(
@@ -289,15 +309,6 @@ class HAPublisher:
                                     payload or SELECT_NONE, retain=True)
             elif topic == self.reassign_topic:
                 self._do_reassign()
-            elif topic == self.thumb_seconds_topic:
-                try:
-                    self._thumb_seconds = max(0.0, min(60.0, float(payload)))
-                except (TypeError, ValueError):
-                    pass
-                self.client.publish(f"{self.node}/thumb_seconds",
-                                    self._thumb_seconds, retain=True)
-                # Regenerate the current preview at the new grab time.
-                self._update_reprocess_thumb()
             elif self._faceid_enabled and topic.startswith("frigate/") and "/person/" in topic:
                 # FaceID sub_label event: frigate/<camera>/person/<event_id>
                 self._on_faceid_event(topic, msg.payload)
@@ -717,41 +728,26 @@ class HAPublisher:
         # Start the inbox dropdown with a clean (nothing-selected) state.
         self.client.publish(f"{self.node}/inbox_select", SELECT_NONE,
                             retain=True)
-        # Live grab-time (seconds) for the reprocess preview thumbnail. Applies
-        # immediately (no restart) — kept out of the calibration/Apply flow.
+        # Retire the previous thumbnail grab-time control.
         self.client.publish(
-            f"{self.prefix}/number/{self.node}/thumb_seconds/config",
-            json.dumps({
-                "name": "Reprocess Thumbnail Second",
-                "unique_id": f"{self.node}_thumb_seconds",
-                "state_topic": f"{self.node}/thumb_seconds",
-                "command_topic": self.thumb_seconds_topic,
-                "min": 0, "max": 60, "step": 0.5, "mode": "box",
-                "unit_of_measurement": "s",
-                "icon": "mdi:image-search",
-                "entity_category": "config",
-                "availability_topic": self.avail_topic,
-                "device": dev,
-            }), retain=True)
-        self.client.publish(f"{self.node}/thumb_seconds", self._thumb_seconds,
-                            retain=True)
-        # Preview-thumbnail sensor for the selected reprocess clip (name in
-        # state, JPG url in the `thumb_url` attribute; "" when none/failed).
+            f"{self.prefix}/number/{self.node}/thumb_seconds/config", "", retain=True)
+        # Playable preview sensor for the selected reprocess clip.
         self.client.publish(
             f"{self.prefix}/sensor/{self.node}/reprocess_thumb/config",
             json.dumps({
-                "name": "Juggle Reprocess Thumbnail",
+                "name": "Juggle Reprocess Preview",
                 "unique_id": f"{self.node}_reprocess_thumb",
                 "state_topic": f"{self.node}/reprocess_thumb",
                 "value_template": "{{ value_json.name | default('none') }}",
                 "json_attributes_topic": f"{self.node}/reprocess_thumb",
-                "icon": "mdi:image",
+                "icon": "mdi:movie-open-play",
                 "availability_topic": self.avail_topic,
                 "device": dev,
             }), retain=True)
         self.client.publish(
             f"{self.node}/reprocess_thumb",
-            json.dumps({"name": "none", "thumb_url": ""}), retain=True)
+            json.dumps({"name": "none", "video_url": "",
+                        "attributed_to": ""}), retain=True)
         # "Last processed clip" sensor — updated after EVERY clip (initial or
         # reprocess) so you can watch a queue drain. The video_url attribute is
         # populated only when the clip is browser-playable H.264 (a cheap copy,
@@ -832,10 +828,26 @@ class HAPublisher:
         # Keep the reprocess dropdown in sync. Always include the "(none)"
         # placeholder as the first option so there's a valid "nothing selected"
         # state to fall back to after a reprocess requeues the chosen file.
-        opts = [SELECT_NONE] + pfiles[:50]
+        attributions = (
+            self._worker.db.clip_attributions(pfiles[:50])
+            if self._worker is not None else {}
+        )
+        opts, option_to_filename, filename_to_option = _build_reprocess_options(
+            pfiles[:50], attributions)
+        self._reprocess_option_to_filename = option_to_filename
+        self._reprocess_filename_to_option = filename_to_option
+        self._reprocess_attributions = attributions
         if opts != self._last_select_options:
             self._announce_reprocess_select(opts)
             self._last_select_options = opts
+            if self._reprocess_selected:
+                selected_option = filename_to_option.get(self._reprocess_selected)
+                if selected_option is None:
+                    self._reprocess_selected = None
+                    self._update_reprocess_preview()
+                    selected_option = SELECT_NONE
+                self.client.publish(f"{self.node}/reprocess_select",
+                                    selected_option, retain=True)
         # Keep the inbox-delete dropdown in sync with the live inbox contents.
         in_opts = [SELECT_NONE] + infiles[:50]
         if in_opts != self._last_inbox_options:
@@ -882,7 +894,7 @@ class HAPublisher:
             self._reprocess_selected = None
             self.client.publish(f"{self.node}/reprocess_select", SELECT_NONE,
                                 retain=True)
-            self._update_reprocess_thumb()  # clear the stale preview thumbnail
+            self._update_reprocess_preview()  # clear the stale preview
         except Exception as exc:
             print(f"  [reprocess] failed to requeue '{name}': {exc}", flush=True)
 
@@ -979,21 +991,63 @@ class HAPublisher:
                     "device": self._device(),
                 }), retain=True)
 
+    def _update_reprocess_preview(self) -> None:
+        """Publish a browser-playable preview of the selected archived clip."""
+        if not self.enabled:
+            return
+
+        def _clear() -> None:
+            self.client.publish(
+                f"{self.node}/reprocess_thumb",
+                json.dumps({"name": "none", "video_url": "",
+                            "attributed_to": ""}), retain=True)
+
+        sel = self._reprocess_selected
+        if not sel or sel == SELECT_NONE:
+            _clear()
+            return
+        name = os.path.basename(sel)
+        processed = self.cfg.capture.get("processed_dir")
+        src = os.path.join(processed or "", name)
+        if not os.path.isfile(src):
+            _clear()
+            return
+
+        hs_dir = self.cfg.capture.get("highscore_dir", "highscores")
+        dst = os.path.join(hs_dir, "reprocess_preview.mp4")
+        tmp = dst + ".part"
+        try:
+            os.makedirs(hs_dir, exist_ok=True)
+            cmd = ["ffmpeg", "-y", "-loglevel", "error", "-i", src,
+                   "-map", "0:v:0", "-an"]
+            if self._probe_codec(src) == "h264":
+                cmd += ["-c:v", "copy"]
+            else:
+                cmd += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+                        "-pix_fmt", "yuv420p"]
+            cmd += ["-movflags", "+faststart", tmp]
+            subprocess.run(cmd, check=True)
+            os.replace(tmp, dst)
+        except Exception as exc:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            print(f"  [preview] failed for {name}: {exc}", flush=True)
+            _clear()
+            return
+
+        ver = time.time_ns()
+        url = f"{self.media_base.rstrip('/')}/reprocess_preview.mp4?v={ver}"
+        attributed_to = ", ".join(self._reprocess_attributions.get(name, []))
+        payload = {"name": name, "video_url": url,
+                   "attributed_to": attributed_to, "ts": ver}
+        self.client.publish(
+            f"{self.node}/reprocess_thumb", json.dumps(payload), retain=True)
+        print(f"  [preview] {name} -> {dst}", flush=True)
+
     def _do_reassign(self) -> None:
-        """Move the source person's CURRENT high score (and its replay clip) to
-        the target person — for fixing a misattribution (e.g. an "Unknown
-        Juggler" record that was really one of the kids).
-
-        Re-points the source's best attempt to the target and recomputes both
-        leaderboard scores (delegated to :func:`db.reassign_current_high`), then
-        reconciles the replay video: if the moved score becomes the target's new
-        best, the source's replay `.mp4` is moved onto the target; otherwise the
-        source's now-orphaned replay is removed. The source always loses its
-        replay (its new, lower best has no saved video — clips are overwrite-in-
-        place, so only the record clip ever existed).
-
-        Runs on the MQTT network thread, so it uses its own short-lived SQLite
-        connection (never the pipeline's ``self.db``)."""
+        """Move the source person's current high score and replay to the target."""
         from .db import reassign_current_high
 
         src_name = self._reassign_source
@@ -1013,7 +1067,6 @@ class HAPublisher:
         src_slug, tgt_slug = _slug(src_name), _slug(tgt_name)
         src_file = os.path.join(hs_dir, f"{src_slug}.mp4")
         tgt_file = os.path.join(hs_dir, f"{tgt_slug}.mp4")
-
         result = None
         src_row = tgt_row = None
         try:
@@ -1027,7 +1080,6 @@ class HAPublisher:
                           f"{tgt_name!r}", flush=True)
                     return
                 src_pid, tgt_pid = ids[src_name], ids[tgt_name]
-
                 result = reassign_current_high(conn, src_pid, tgt_pid)
                 if result is None:
                     print(f"  [reassign] {src_name} has no recorded attempt to "
@@ -1038,7 +1090,6 @@ class HAPublisher:
                           f"move", flush=True)
                     return
 
-                # --- reconcile the replay video ---
                 became_best = result["moved_count"] > result["tgt_old_high"]
                 if became_best:
                     moved_ok = False
@@ -1058,9 +1109,9 @@ class HAPublisher:
                         # New best but no source clip to move: clear the target's
                         # stale lower-score clip so it can't misrepresent the new
                         # record, and drop any orphaned source file.
-                        for f in (tgt_file, src_file):
+                        for path in (tgt_file, src_file):
                             try:
-                                os.remove(f)
+                                os.remove(path)
                             except OSError:
                                 pass
                         conn.execute(
@@ -1073,13 +1124,10 @@ class HAPublisher:
                         os.remove(src_file)
                     except OSError:
                         pass
-                # Either way the source no longer owns a replay for its new,
-                # lower best (no saved video exists for it).
                 conn.execute(
                     "UPDATE people SET high_clip = NULL, high_clip_at = NULL "
                     "WHERE id = ?", (src_pid,))
                 conn.commit()
-
                 src_row = conn.execute(
                     "SELECT high_score, high_clip, high_clip_at FROM people "
                     "WHERE id = ?", (src_pid,)).fetchone()
@@ -1092,7 +1140,6 @@ class HAPublisher:
             print(f"  [reassign] failed: {exc}", flush=True)
             return
 
-        # Republish both leaderboard entries so HA reflects the change now.
         if src_row is not None:
             self.publish_high(src_name, int(src_row["high_score"]),
                               has_clip=bool(src_row["high_clip"]),
@@ -1101,7 +1148,6 @@ class HAPublisher:
             self.publish_high(tgt_name, int(tgt_row["high_score"]),
                               has_clip=bool(tgt_row["high_clip"]),
                               updated=tgt_row["high_clip_at"])
-        # Reset both dropdowns to "(none)".
         self._reassign_source = None
         self._reassign_target = None
         self.client.publish(f"{self.node}/reassign_source", SELECT_NONE,
@@ -1112,153 +1158,6 @@ class HAPublisher:
               f"{src_name} -> {tgt_name} "
               f"(now {src_name}={int(src_row['high_score'])}, "
               f"{tgt_name}={int(tgt_row['high_score'])})", flush=True)
-
-    @staticmethod
-    def _fmt_duration(seconds: float) -> str:
-        """Format seconds as m:ss (e.g. 20.4 -> '0:20')."""
-        s = int(round(seconds))
-        return f"{s // 60}:{s % 60:02d}"
-
-    def _probe_duration(self, path: str) -> Optional[float]:
-        """Clip duration in seconds via ffprobe, or None on failure."""
-        try:
-            out = subprocess.run(
-                ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-                 "-of", "default=nw=1:nokey=1", path],
-                check=True, capture_output=True, text=True).stdout.strip()
-            return float(out) if out else None
-        except Exception:
-            return None
-
-    def _probe_codec(self, path: str) -> Optional[str]:
-        """Video codec name (e.g. 'h264', 'hevc') via ffprobe, or None."""
-        try:
-            out = subprocess.run(
-                ["ffprobe", "-v", "error", "-select_streams", "v:0",
-                 "-show_entries", "stream=codec_name",
-                 "-of", "default=nw=1:nokey=1", path],
-                check=True, capture_output=True, text=True).stdout.strip()
-            return out or None
-        except Exception:
-            return None
-
-    def publish_last_processed(self, clip_path: str, streaks: list) -> None:
-        """Publish the just-finished clip (any clip, initial or reprocess) so HA
-        can show live progress as a queue drains.
-
-        Serves the clip inline only if it's browser-playable H.264 — a cheap
-        copy to the single overwritten <highscore_dir>/last_processed.mp4, no
-        transcode. HEVC clips still report name + juggle counts (video_url '')."""
-        if not self.enabled:
-            return
-        name = os.path.basename(clip_path)
-        stem = os.path.splitext(name)[0]
-        parts = stem.rsplit("_", 1)
-        event_id = parts[1] if len(parts) == 2 and parts[0].startswith("clip_") else None
-        attributed_to = list(dict.fromkeys(
-            str(s.get("person")) for s in (streaks or []) if s.get("person")
-        )) or [UNKNOWN_NAME]
-        recent = self._recent_faceid_attribution
-        if event_id and recent and recent[0] == event_id:
-            attributed_to = [recent[1]]
-            self._recent_faceid_attribution = None
-        counts = [int(s.get("count", 0)) for s in (streaks or [])]
-        best = max(counts) if counts else 0
-        url = ""
-        if self._probe_codec(clip_path) == "h264":
-            try:
-                hs = self.cfg.capture.get("highscore_dir", "highscores")
-                os.makedirs(hs, exist_ok=True)
-                dst = os.path.join(hs, "last_processed.mp4")
-                tmp = dst + ".part"
-                shutil.copy2(clip_path, tmp)
-                os.replace(tmp, dst)  # atomic swap of the single served file
-                url = f"{self.media_base.rstrip('/')}/last_processed.mp4?v={int(time.time())}"
-            except Exception as exc:
-                print(f"  [last] serve failed for {name}: {exc}", flush=True)
-        summary = ", ".join(
-            f"{s.get('person', '?')} {s.get('count', 0)}"
-            for s in (streaks or [])[:6]
-        ) or "no juggles"
-        payload = {
-            "name": name,
-            "video_url": url,
-            "best": best,
-            "attempts": len(counts),
-            "summary": summary,
-            "attributed_to": ", ".join(attributed_to),
-            "ts": int(time.time()),
-        }
-        self._last_processed_event_id = event_id
-        self._last_processed_payload = payload
-        self.client.publish(
-            f"{self.node}/last_processed",
-            json.dumps(payload), retain=True)
-        print(f"  [last] {name}: best {best}, {len(counts)} attempts"
-              f"{' (video)' if url else ' (no inline video)'}", flush=True)
-
-    def note_last_processed_attribution(self, event_id: str,
-                                        person_name: str) -> None:
-        """Update the latest clip's attribution when FaceID arrives late."""
-        self._recent_faceid_attribution = (event_id, person_name)
-        if (event_id != self._last_processed_event_id
-                or self._last_processed_payload is None):
-            return
-        self._last_processed_payload["attributed_to"] = person_name
-        self.client.publish(
-            f"{self.node}/last_processed",
-            json.dumps(self._last_processed_payload), retain=True)
-
-    def _update_reprocess_thumb(self) -> None:
-        """Generate + publish a poster thumbnail for the currently selected
-        reprocess clip, grabbed `self._thumb_seconds` into the clip. Publishes an
-        empty ``thumb_url`` when nothing is selected or the grab fails, so the HA
-        preview card hides. Cheap single-frame ffmpeg extract, on demand."""
-        if not self.enabled:
-            return
-        def _clear() -> None:
-            self.client.publish(
-                f"{self.node}/reprocess_thumb",
-                json.dumps({"name": "none", "thumb_url": ""}), retain=True)
-        sel = self._reprocess_selected
-        if not sel or sel == SELECT_NONE:
-            _clear()
-            return
-        name = os.path.basename(sel)  # guard against path traversal
-        processed = self.cfg.capture.get("processed_dir")
-        src = os.path.join(processed or "", name)
-        if not os.path.isfile(src):
-            _clear()
-            return
-        hs_dir = self.cfg.capture.get("highscore_dir", "highscores")
-        thumbs = os.path.join(hs_dir, "thumbs")
-        try:
-            os.makedirs(thumbs, exist_ok=True)
-            out = os.path.join(thumbs, name + ".jpg")
-            # -ss before -i = fast seek; scale to 480px wide (even height) JPG.
-            subprocess.run(
-                ["ffmpeg", "-y", "-loglevel", "error",
-                 "-ss", f"{max(0.0, self._thumb_seconds):.2f}", "-i", src,
-                 "-frames:v", "1", "-vf", "scale=480:-2", "-q:v", "3", out],
-                check=True)
-        except Exception as exc:
-            print(f"  [thumb] failed for {name}: {exc}", flush=True)
-            _clear()
-            return
-        ver = int(time.time())
-        url = f"{self.media_base.rstrip('/')}/thumbs/{name}.jpg?v={ver}"
-        payload = {"name": name, "thumb_url": url}
-        dur = self._probe_duration(src)
-        dnote = ""
-        if dur is not None:
-            payload["duration"] = round(dur, 1)
-            dstr = self._fmt_duration(dur)
-            payload["duration_str"] = dstr
-            dnote = f" ({dstr})"
-        self.client.publish(
-            f"{self.node}/reprocess_thumb", json.dumps(payload), retain=True)
-        print(f"  [thumb] {name} @ {self._thumb_seconds:.1f}s{dnote} -> {out}",
-              flush=True)
 
     def publish_reprocess_pending(self, clip_name: str,
                                   annotated: bool) -> None:
@@ -1364,8 +1263,6 @@ class HAPublisher:
     # ------------------------------------------------------------------
     def announce_timing(self) -> None:
         """Discovery for last / average clip processing-time sensors."""
-        if not self.enabled:
-            return
         dev = self._device()
         common = {
             "device_class": "duration",

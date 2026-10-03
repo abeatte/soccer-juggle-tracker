@@ -521,10 +521,7 @@ views:
               - type: divider
               - entity: select.front_yard_soccer_juggle_tracker_juggle_reprocess_file
                 name: Reprocess file
-              - entity: >-
-                  number.front_yard_soccer_juggle_tracker_reprocess_thumbnail_second
-                name: Thumbnail second
-              - entity: switch.front_yard_soccer_juggle_tracker_annotate_on_reprocess
+              - entity: switch.front_yard_soccer_juggle_tracker_annotate_processed_clips
                 name:
                   type: entity
               - entity: >-
@@ -533,18 +530,19 @@ views:
           - type: markdown
             content: >
               {% set k =
-              states['sensor.front_yard_soccer_juggle_tracker_juggle_reprocess_thumbnail']
-              %} {% if k %}{% set u = k.attributes.get('thumb_url') %}{% set d =
-              k.attributes.get('duration_str') %}{% if u %}**{{ k.state }}**{% if
-              d %} · ⏱️ {{ d }}{% endif %}
+              states['sensor.front_yard_soccer_juggle_tracker_reprocess_thumb']
+              %} {% if k %}{% set u = k.attributes.get('video_url') %}{% set p =
+              k.attributes.get('attributed_to') %}{% if u %}**{{ k.state }}** ·
+              {{ p or 'No juggle attempts' }}
 
-              <img src="{{ u }}" width="100%">{% endif %}{% endif %}
-            title: 🖼️ Selected Clip Preview
+              <video controls preload="metadata" width="100%" src="{{ u
+              }}"></video>{% endif %}{% endif %}
+            title: 🎬 Selected Clip
             visibility:
               - condition: state
-                attribute: thumb_url
+                attribute: video_url
                 entity: >-
-                  sensor.front_yard_soccer_juggle_tracker_juggle_reprocess_thumbnail
+                  sensor.front_yard_soccer_juggle_tracker_reprocess_thumb
                 state_not: ""
         visibility:
           - condition: user
