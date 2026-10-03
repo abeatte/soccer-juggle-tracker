@@ -11,3 +11,4 @@ services:
       - /home/abeatte/homeassistant/config:/config
       - /etc/localtime:/etc/localtime:ro
       - /srv/juggle_highscores:/config/www/juggle:ro
+      - /srv/juggle_processed:/config/www/processed:ro

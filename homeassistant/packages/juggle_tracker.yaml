@@ -15,43 +15,47 @@
 # media_player, notify service) with your actual entity IDs.
 # ---------------------------------------------------------------------------
 
-mqtt:
-  sensor:
-    # Summary of the most recently processed clip (retained topic).
-    - name: "Juggle Last Session"
-      unique_id: juggle_tracker_last_session
-      state_topic: "juggle_tracker/last_session"
-      value_template: >-
-        {{ (value_json.results | length) if value_json.results is defined else 0 }}
-      unit_of_measurement: "streaks"
-      icon: mdi:soccer
-      json_attributes_topic: "juggle_tracker/last_session"
-      device:
-        identifiers: ["juggle_tracker"]
-        name: "Soccer Juggle Tracker"
-        manufacturer: "DIY"
-        model: "RLC-810A CV pipeline"
-      # attributes: ts, results[] ({person,count,reason,start_frame,end_frame})
-
-template:
-  - sensor:
-      # Best streak from the most recent session, and who did it.
-      - name: "Juggle Last Session Best"
-        unique_id: juggle_last_session_best
-        unit_of_measurement: "juggles"
-        icon: mdi:trophy-outline
-        state: >-
-          {% set r = state_attr('sensor.juggle_last_session','results') or [] %}
-          {{ (r | map(attribute='count') | max) if r | length > 0 else 0 }}
-      - name: "Juggle Last Session Best Player"
-        unique_id: juggle_last_session_best_player
-        icon: mdi:account-star
-        state: >-
-          {% set r = state_attr('sensor.juggle_last_session','results') or [] %}
-          {% if r | length > 0 %}
-            {% set top = r | sort(attribute='count', reverse=true) | first %}
-            {{ top.person }}
-          {% else %}unknown{% endif %}
+# Legacy package config disabled: the tracker now publishes discovery-based
+# entities directly via MQTT. Keeping this old `juggle_tracker` package active
+# creates a mixed HA entity set and causes the stale registry problems.
+#
+# mqtt:
+#   sensor:
+#     # Summary of the most recently processed clip (retained topic).
+#     - name: "Juggle Last Session"
+#       unique_id: juggle_tracker_last_session
+#       state_topic: "juggle_tracker/last_session"
+#       value_template: >-
+#         {{ (value_json.results | length) if value_json.results is defined else 0 }}
+#       unit_of_measurement: "streaks"
+#       icon: mdi:soccer
+#       json_attributes_topic: "juggle_tracker/last_session"
+#       device:
+#         identifiers: ["juggle_tracker"]
+#         name: "Soccer Juggle Tracker"
+#         manufacturer: "DIY"
+#         model: "RLC-810A CV pipeline"
+#       # attributes: ts, results[] ({person,count,reason,start_frame,end_frame})
+#
+# template:
+#   - sensor:
+#       # Best streak from the most recent session, and who did it.
+#       - name: "Juggle Last Session Best"
+#         unique_id: juggle_last_session_best
+#         unit_of_measurement: "juggles"
+#         icon: mdi:trophy-outline
+#         state: >-
+#           {% set r = state_attr('sensor.juggle_last_session','results') or [] %}
+#           {{ (r | map(attribute='count') | max) if r | length > 0 else 0 }}
+#       - name: "Juggle Last Session Best Player"
+#         unique_id: juggle_last_session_best_player
+#         icon: mdi:account-star
+#         state: >-
+#           {% set r = state_attr('sensor.juggle_last_session','results') or [] %}
+#           {% if r | length > 0 %}
+#             {% set top = r | sort(attribute='count', reverse=true) | first %}
+#             {{ top.person }}
+#           {% else %}unknown{% endif %}
 
 # automation:
 #   # 1) Announce a new personal record (fires a few minutes after the session,

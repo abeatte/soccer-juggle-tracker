@@ -11,6 +11,7 @@ services:
       - .:/config
       - /etc/localtime:/etc/localtime:ro
       - /srv/juggle_highscores:/config/www/juggle:ro
+      - /srv/juggle_processed:/config/www/processed:ro
     restart: unless-stopped
     privileged: true
     network_mode: host

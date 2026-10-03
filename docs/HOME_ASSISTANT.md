@@ -91,6 +91,7 @@ services:
   homeassistant:
     volumes:
       - /srv/juggle_highscores:/config/www/juggle:ro   # <-- add this (read-only)
+      - /srv/juggle_processed:/config/www/processed:ro # selected reprocess clips
 ```
 
 Recreate the HA container so the mount takes effect. Clips then load at:
@@ -98,6 +99,11 @@ Recreate the HA container so the mount takes effect. Clips then load at:
 ```
 http://<ha-host>:8123/local/juggle/<slug>.mp4     e.g. .../local/juggle/artie.mp4
 ```
+
+Selected H.264 MP4s in `/srv/juggle_processed` are served directly at
+`/local/processed/<filename>`. Other codecs or containers use the tracker's
+H.264 preview fallback. This exposes the processed archive as static HA assets;
+only add the mount if clients that can reach HA may access those clips.
 
 > `/config/www` is served by HA at `/local/`. A one-time HA restart is needed
 > after first adding the `www` folder/mount, but new/overwritten clips inside it

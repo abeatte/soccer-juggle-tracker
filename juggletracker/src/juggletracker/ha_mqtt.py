@@ -21,6 +21,7 @@ import sqlite3
 import subprocess
 import time
 from typing import Optional
+from urllib.parse import quote
 
 from . import config as cfgmod
 from .db import UNKNOWN_NAME
@@ -635,6 +636,7 @@ class HAPublisher:
             json.dumps({
                 "name": "Juggle Inbox Queue",
                 "unique_id": f"{self.node}_inbox_queue",
+                "default_entity_id": "sensor.juggle_inbox_queue",
                 "state_topic": f"{self.node}/inbox",
                 "value_template": "{{ value_json.count }}",
                 "json_attributes_topic": f"{self.node}/inbox",
@@ -648,6 +650,7 @@ class HAPublisher:
             json.dumps({
                 "name": "Juggle Processed Count",
                 "unique_id": f"{self.node}_processed_count",
+                "default_entity_id": "sensor.juggle_processed_count",
                 "state_topic": f"{self.node}/processed",
                 "value_template": "{{ value_json.count }}",
                 "json_attributes_topic": f"{self.node}/processed",
@@ -661,6 +664,7 @@ class HAPublisher:
             json.dumps({
                 "name": "Reprocess Selected Clip",
                 "unique_id": f"{self.node}_reprocess",
+                "default_entity_id": "button.reprocess_selected_clip",
                 "command_topic": self.reprocess_topic,
                 "payload_press": "reprocess",
                 "icon": "mdi:reload",
@@ -678,6 +682,7 @@ class HAPublisher:
             json.dumps({
                 "name": "Annotate Processed Clips",
                 "unique_id": f"{self.node}_annotate_processed",
+                "default_entity_id": "switch.juggle_annotate_processed_clips",
                 "state_topic": f"{self.node}/annotate_processed",
                 "command_topic": self.annotate_processed_topic,
                 "payload_on": "ON", "payload_off": "OFF",
@@ -737,6 +742,7 @@ class HAPublisher:
             json.dumps({
                 "name": "Juggle Reprocess Preview",
                 "unique_id": f"{self.node}_reprocess_thumb",
+                "default_entity_id": "sensor.juggle_reprocess_preview",
                 "state_topic": f"{self.node}/reprocess_thumb",
                 "value_template": "{{ value_json.name | default('none') }}",
                 "json_attributes_topic": f"{self.node}/reprocess_thumb",
@@ -783,6 +789,7 @@ class HAPublisher:
             json.dumps({
                 "name": "Juggle Reprocess File",
                 "unique_id": f"{self.node}_reprocess_file",
+                "default_entity_id": "select.juggle_reprocess_file",
                 "state_topic": f"{self.node}/reprocess_select",
                 "command_topic": self.reprocess_select_topic,
                 "options": options,
@@ -991,6 +998,21 @@ class HAPublisher:
                     "device": self._device(),
                 }), retain=True)
 
+    @staticmethod
+    def _probe_codec(path: str) -> Optional[str]:
+        """Return the first video stream's codec, or None if probing fails."""
+        try:
+            result = subprocess.run(
+                ["ffprobe", "-v", "error", "-select_streams", "v:0",
+                 "-show_entries", "stream=codec_name",
+                 "-of", "default=noprint_wrappers=1:nokey=1", path],
+                check=True, capture_output=True, text=True, timeout=10,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        codecs = result.stdout.strip().splitlines()
+        return codecs[0].strip().lower() if codecs else None
+
     def _update_reprocess_preview(self) -> None:
         """Publish a browser-playable preview of the selected archived clip."""
         if not self.enabled:
@@ -1013,38 +1035,43 @@ class HAPublisher:
             _clear()
             return
 
-        hs_dir = self.cfg.capture.get("highscore_dir", "highscores")
-        dst = os.path.join(hs_dir, "reprocess_preview.mp4")
-        tmp = dst + ".part"
-        try:
-            os.makedirs(hs_dir, exist_ok=True)
-            cmd = ["ffmpeg", "-y", "-loglevel", "error", "-i", src,
-                   "-map", "0:v:0", "-an"]
-            if self._probe_codec(src) == "h264":
-                cmd += ["-c:v", "copy"]
-            else:
-                cmd += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-                        "-pix_fmt", "yuv420p"]
-            cmd += ["-movflags", "+faststart", tmp]
-            subprocess.run(cmd, check=True)
-            os.replace(tmp, dst)
-        except Exception as exc:
-            try:
-                os.remove(tmp)
-            except OSError:
-                pass
-            print(f"  [preview] failed for {name}: {exc}", flush=True)
-            _clear()
-            return
-
+        codec = self._probe_codec(src)
         ver = time.time_ns()
-        url = f"{self.media_base.rstrip('/')}/reprocess_preview.mp4?v={ver}"
         attributed_to = ", ".join(self._reprocess_attributions.get(name, []))
+        if codec == "h264" and name.lower().endswith(".mp4"):
+            media_root = self.media_base.rstrip("/").rsplit("/", 1)[0]
+            url = f"{media_root}/processed/{quote(name, safe='')}?v={ver}"
+        else:
+            hs_dir = self.cfg.capture.get("highscore_dir", "highscores")
+            dst = os.path.join(hs_dir, "reprocess_preview.mp4")
+            tmp = dst + ".part"
+            try:
+                os.makedirs(hs_dir, exist_ok=True)
+                cmd = ["ffmpeg", "-y", "-loglevel", "error", "-i", src,
+                       "-map", "0:v:0", "-an"]
+                if codec == "h264":
+                    cmd += ["-c:v", "copy"]
+                else:
+                    cmd += ["-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+                            "-pix_fmt", "yuv420p"]
+                cmd += ["-movflags", "+faststart", "-f", "mp4", tmp]
+                subprocess.run(cmd, check=True)
+                os.replace(tmp, dst)
+            except Exception as exc:
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+                print(f"  [preview] failed for {name}: {exc}", flush=True)
+                _clear()
+                return
+            url = f"{self.media_base.rstrip('/')}/reprocess_preview.mp4?v={ver}"
+
         payload = {"name": name, "video_url": url,
                    "attributed_to": attributed_to, "ts": ver}
         self.client.publish(
             f"{self.node}/reprocess_thumb", json.dumps(payload), retain=True)
-        print(f"  [preview] {name} -> {dst}", flush=True)
+        print(f"  [preview] {name} -> {url}", flush=True)
 
     def _do_reassign(self) -> None:
         """Move the source person's current high score and replay to the target."""
