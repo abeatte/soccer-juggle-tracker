@@ -53,21 +53,24 @@ class ClipResult:
 def _apply_faceid_attribution(db: Database, ha: HAPublisher,
                               session_id: int,
                               event_id: Optional[str]) -> tuple[Optional[str], Optional[dict]]:
-    """Resolve and apply an event label after its attempts have been committed."""
+    """Resolve and apply an event label after its attempts have been committed.
+
+    Resolution order:
+      1. In-memory pending dict (FaceID fired while the clip was in-flight).
+      2. Frigate API fallback (authoritative; queries Frigate's own event store).
+    The faceid_labels DB cache is no longer needed now that the Frigate API
+    provides the same data without a separate persistence layer.
+    """
     if not event_id:
         return None, None
 
     person_name = ha.consume_pending_faceid(event_id)
     if (person_name is None
             and not db.session_has_attributed_attempt(session_id)):
-        person_name = db.faceid_label(event_id)
-    if (person_name is None
-            and not db.session_has_attributed_attempt(session_id)):
         person_name = ha.lookup_frigate_sub_label(event_id)
     if not person_name:
         return None, None
 
-    db.remember_faceid_label(event_id, person_name)
     return person_name, db.reassign_session_by_event(event_id, person_name)
 
 
@@ -364,6 +367,9 @@ class Pipeline:
                 )
                 if person_name is not None:
                     if result is not None:
+                        for streak in streaks:
+                            if streak.get("person") == UNKNOWN_NAME:
+                                streak["person"] = person_name
                         self.ha.note_last_processed_attribution(
                             frigate_event_id, person_name
                         )

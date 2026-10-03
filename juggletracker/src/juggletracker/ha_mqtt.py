@@ -49,6 +49,7 @@ def _event_id_from_filename(filename: str) -> Optional[str]:
     parts = stem.rsplit("_", 1)
     if len(parts) == 2 and parts[0].startswith("clip_"):
         return parts[1]
+
     return None
 
 
@@ -88,6 +89,7 @@ class HAPublisher:
         self._last_processed_event_id: Optional[str] = None
         self._last_processed_payload: Optional[dict] = None
         self._recent_faceid_attribution: Optional[tuple[str, str]] = None
+        self._pending_faceid: dict[str, str] = {}
         self.client = None
         if not self.enabled:
             return
@@ -171,13 +173,6 @@ class HAPublisher:
         self._faceid_enabled = bool(
             cfg.home_assistant.get("faceid_enabled", False)
         )
-        # Pending FaceID attributions: event_id -> person_name.
-        # Populated when a sub_label message arrives before pipeline.process()
-        # has finished (or even started) writing attempts for that session.
-        # Consumed by pipeline.process() at the end of each clip via
-        # consume_pending_faceid(), which applies the attribution before HA
-        # scores are published so the correct person is credited immediately.
-        self._pending_faceid: dict[str, str] = {}
         if self._faceid_enabled:
             self.client.subscribe("frigate/+/person/+", qos=1)
             print("  [faceid] subscribed to frigate/+/person/+ sub_label events",
@@ -388,7 +383,6 @@ class HAPublisher:
         try:
             db = Database(self.cfg.database.path)
             try:
-                db.remember_faceid_label(event_id, person_name)
                 result = db.reassign_session_by_event(event_id, person_name)
                 if result is None:
                     # reassign_session_by_event returns None for two distinct
@@ -420,13 +414,6 @@ class HAPublisher:
                             f"'{person_name}'",
                             flush=True,
                         )
-                    return
-                print(
-                    f"  [faceid] re-attributed {result['moved_count']} attempt(s) "
-                    f"(best: {result['best_count']}) to '{person_name}' "
-                    f"[session {result['session_id']}]",
-                    flush=True,
-                )
                 self.note_last_processed_attribution(event_id, person_name)
                 # Republish updated high scores for all people so HA reflects the change.
                 people = db.list_people()
@@ -889,14 +876,22 @@ class HAPublisher:
         pending_label = None
         if event_id:
             try:
-                db = Database(self.cfg.database.path)
-                try:
-                    pending_label = db.faceid_label(event_id)
-                finally:
-                    db.close()
+                attrs = Database.clip_attributions_from_path(
+                    self.cfg.database.path, [name]
+                )
+                # Pick the first known (non-Unknown) person attributed to this
+                # clip from a previous run.  If everything was Unknown, leave it
+                # unset — the Frigate API fallback in _apply_faceid_attribution
+                # will query for a label at end-of-clip.
+                people = [
+                    p for p in attrs.get(name, [])
+                    if p != UNKNOWN_NAME
+                ]
+                if people:
+                    pending_label = people[0]
             except Exception as exc:
-                print(f"  [reprocess] FaceID label lookup failed for {event_id}: "
-                      f"{exc}", flush=True)
+                print(f"  [reprocess] prior-attribution lookup failed for "
+                      f"{event_id}: {exc}", flush=True)
         try:
             if pending_label and event_id:
                 self._pending_faceid[event_id] = pending_label

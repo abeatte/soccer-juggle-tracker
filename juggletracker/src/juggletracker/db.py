@@ -46,11 +46,6 @@ CREATE TABLE IF NOT EXISTS attempts (
     ended_reason TEXT,                  -- 'hand' | 'ground' | 'lost' | 'end'
     created_at  REAL NOT NULL
 );
-CREATE TABLE IF NOT EXISTS faceid_labels (
-    event_id    TEXT PRIMARY KEY,
-    person_name TEXT NOT NULL,
-    updated_at  REAL NOT NULL
-);
 """
 
 
@@ -116,25 +111,6 @@ class Database:
             (path, float(ts), person_id),
         )
         self.conn.commit()
-
-    def remember_faceid_label(self, event_id: str, person_name: str) -> None:
-        """Persist the latest nonempty FaceID label received for an event."""
-        if not event_id or not person_name.strip():
-            return
-        self.conn.execute(
-            "INSERT INTO faceid_labels(event_id, person_name, updated_at) "
-            "VALUES (?, ?, ?) ON CONFLICT(event_id) DO UPDATE SET "
-            "person_name=excluded.person_name, updated_at=excluded.updated_at",
-            (event_id, person_name.strip(), time.time()),
-        )
-        self.conn.commit()
-
-    def faceid_label(self, event_id: str) -> Optional[str]:
-        row = self.conn.execute(
-            "SELECT person_name FROM faceid_labels WHERE event_id = ?",
-            (event_id,),
-        ).fetchone()
-        return str(row["person_name"]) if row else None
 
     def session_has_attributed_attempt(self, session_id: int) -> bool:
         """Return whether this session has an attempt assigned to a known person."""

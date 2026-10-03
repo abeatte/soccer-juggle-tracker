@@ -1,3 +1,10 @@
+"""Tests for the reprocess flow's prior-attribution seeding.
+
+The faceid_labels table has been removed. On reprocess, _do_reprocess() now
+derives the previously-attributed person from the attempts/people tables via
+clip_attributions_from_path() and pre-loads _pending_faceid so the re-run
+attributes to the right person without needing FaceID to re-fire.
+"""
 from __future__ import annotations
 
 import os
@@ -7,7 +14,7 @@ from types import SimpleNamespace
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from juggletracker.db import Database  # noqa: E402
+from juggletracker.db import Database, UNKNOWN_NAME  # noqa: E402
 from juggletracker.ha_mqtt import HAPublisher  # noqa: E402
 
 
@@ -37,17 +44,10 @@ def test_retired_reassign_discovery_is_cleared():
     ]
 
 
-def test_latest_faceid_label_is_persisted_for_reprocessing(tmp_path):
-    db = Database(str(tmp_path / "juggle.db"))
-    db.remember_faceid_label("event-1", "Artie")
-    db.remember_faceid_label("event-1", "Art")
-
-    assert db.faceid_label("event-1") == "Art"
-    assert db.faceid_label("missing-event") is None
-    db.close()
-
-
-def test_reprocess_uses_saved_faceid_label(tmp_path):
+def test_reprocess_seeds_pending_faceid_from_prior_attribution(tmp_path):
+    """When a clip was previously attributed to a known person, _do_reprocess()
+    should pre-load that person into _pending_faceid so the re-run applies the
+    same attribution without needing FaceID to re-fire."""
     processed = tmp_path / "processed"
     inbox = tmp_path / "inbox"
     processed.mkdir()
@@ -56,7 +56,10 @@ def test_reprocess_uses_saved_faceid_label(tmp_path):
 
     db_path = str(tmp_path / "juggle.db")
     db = Database(db_path)
-    db.remember_faceid_label("event-2", "Art")
+    session_id = db.start_session(str(processed / clip_name), 25.0,
+                                  frigate_event_id="event-2")
+    art_id = db.add_person("Art")
+    db.record_attempt(session_id, art_id, 1, 10, "end")
     db.close()
 
     publisher = HAPublisher.__new__(HAPublisher)
@@ -79,6 +82,46 @@ def test_reprocess_uses_saved_faceid_label(tmp_path):
 
     assert (inbox / clip_name).read_bytes() == b"clip"
     assert publisher._pending_faceid["event-2"] == "Art"
+
+
+def test_reprocess_skips_pending_when_only_unknown(tmp_path):
+    """If the prior run only has Unknown Juggler attempts (never attributed),
+    _do_reprocess() should leave _pending_faceid empty — the Frigate API
+    fallback in _apply_faceid_attribution will query for a label at end-of-clip."""
+    processed = tmp_path / "processed"
+    inbox = tmp_path / "inbox"
+    processed.mkdir()
+    clip_name = "clip_front_yard_event-5.mp4"
+    (processed / clip_name).write_bytes(b"clip")
+
+    db_path = str(tmp_path / "juggle.db")
+    db = Database(db_path)
+    session_id = db.start_session(str(processed / clip_name), 25.0,
+                                  frigate_event_id="event-5")
+    db.record_attempt(session_id, db.unknown_person_id, 1, 6, "end")
+    db.close()
+
+    publisher = HAPublisher.__new__(HAPublisher)
+    publisher.enabled = True
+    publisher.client = FakeClient()
+    publisher.node = "juggle_tracker"
+    publisher.cfg = SimpleNamespace(
+        capture={"processed_dir": str(processed), "inbox_dir": str(inbox)},
+        database=SimpleNamespace(path=db_path),
+    )
+    publisher._reprocess_selected = clip_name
+    publisher.annotate_processed = False
+    publisher._pending_faceid = {}
+    publisher._worker = None
+    publisher.publish_queues = lambda: None
+    publisher.publish_reprocess_pending = lambda *_args, **_kwargs: None
+    publisher._update_reprocess_preview = lambda: None
+
+    publisher._do_reprocess()
+
+    assert (inbox / clip_name).read_bytes() == b"clip"
+    # Nothing seeded — Frigate API will handle attribution at end-of-clip.
+    assert publisher._pending_faceid == {}
 
 
 def test_queue_refresh_uses_a_thread_owned_sqlite_connection(tmp_path):

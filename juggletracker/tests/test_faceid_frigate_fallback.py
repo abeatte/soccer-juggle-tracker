@@ -86,7 +86,7 @@ def test_end_of_processing_queries_frigate_and_reassigns_unknown(tmp_path):
     assert person_name == "Artie"
     assert result is not None
     assert result["moved_count"] == 1
-    assert db.faceid_label(event_id) == "Artie"
+    # Attribution is now recorded in attempts/people, not a separate cache table.
     assert db.high_scores()["Artie"] == 14
     assert db.high_scores()["Unknown Juggler"] == 0
     assert ha.lookup_count == 1
@@ -99,14 +99,15 @@ def test_cached_or_pending_label_prevents_frigate_lookup(tmp_path):
     session_id = db.start_session("clip_front_yard_event-3.mp4", 25.0,
                                   frigate_event_id=event_id)
     db.record_attempt(session_id, db.unknown_person_id, 1, 8, "end")
-    db.remember_faceid_label(event_id, "Art")
-    ha = FakeHA(api_label="Artie")
+    # Pre-load the pending dict (simulates FaceID firing before clip finished).
+    ha = FakeHA(api_label="Artie", pending_label="Art")
 
     person_name, result = _apply_faceid_attribution(db, ha, session_id, event_id)
 
     assert person_name == "Art"
     assert result is not None
     assert db.high_scores()["Art"] == 8
+    # Frigate API was not queried because pending_label was available.
     assert ha.lookup_count == 0
     db.close()
 
