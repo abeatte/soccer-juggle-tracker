@@ -32,6 +32,15 @@ from .pose import PoseEstimator, person_center
 from .thermal import ThermalGuard
 
 
+def _frigate_event_id(clip_path: str) -> Optional[str]:
+    """Return the Frigate event id from a filename like clip_back_yard_123.mp4."""
+    stem = os.path.splitext(os.path.basename(clip_path))[0]
+    parts = stem.rsplit("_", 1)
+    if len(parts) == 2 and parts[0].startswith("clip_"):
+        return parts[1]
+    return None
+
+
 @dataclass
 class ClipResult:
     clip: str
@@ -197,18 +206,13 @@ class Pipeline:
             return False
         # Check the clip currently being processed.
         cur = self._cur_clip
-        if cur:
-            basename = os.path.splitext(os.path.basename(cur))[0]
-            parts = basename.split("_", 2)
-            if len(parts) == 3 and parts[2] == event_id:
-                return True
+        if cur and _frigate_event_id(cur) == event_id:
+            return True
         # Check the inbox directory for a queued clip.
         inbox = self.cfg.capture.get("inbox_dir")
         if inbox and os.path.isdir(inbox):
             for fname in os.listdir(inbox):
-                stem = os.path.splitext(fname)[0]
-                parts = stem.split("_", 2)
-                if len(parts) == 3 and parts[2] == event_id:
+                if _frigate_event_id(fname) == event_id:
                     return True
         return False
 
@@ -223,11 +227,9 @@ class Pipeline:
         # Extract the Frigate event ID from the clip filename so the session can
         # be looked up later when FaceID fires a sub_label re-attribution event.
         # Filename format: clip_{camera}_{event_id}.mp4 (from the inbox bridge).
-        _basename = os.path.splitext(os.path.basename(clip_path))[0]
-        _parts = _basename.split("_", 2)  # ["clip", camera, event_id]
-        _frigate_event_id = _parts[2] if len(_parts) == 3 else None
+        frigate_event_id = _frigate_event_id(clip_path)
         session_id = self.db.start_session(clip_path, src.fps,
-                                           frigate_event_id=_frigate_event_id)
+                                           frigate_event_id=frigate_event_id)
         t0 = time.perf_counter()
 
         writer = None
@@ -344,14 +346,17 @@ class Pipeline:
         # in _pending_faceid instead of dropping it.  We apply it now, after all
         # attempts are committed, so sync_all() below publishes the correct
         # person's scores rather than Unknown Juggler.
-        if _frigate_event_id:
-            pending_name = self.ha.consume_pending_faceid(_frigate_event_id)
+        if frigate_event_id:
+            pending_name = self.ha.consume_pending_faceid(frigate_event_id)
             if pending_name is not None:
                 try:
                     result = self.db.reassign_session_by_event(
-                        _frigate_event_id, pending_name
+                        frigate_event_id, pending_name
                     )
                     if result is not None:
+                        self.ha.note_last_processed_attribution(
+                            frigate_event_id, pending_name
+                        )
                         print(
                             f"  [faceid] applied early attribution: "
                             f"{result['moved_count']} attempt(s) "
@@ -372,13 +377,13 @@ class Pipeline:
                     else:
                         print(
                             f"  [faceid] pending attribution for event "
-                            f"{_frigate_event_id} found no Unknown attempts to move",
+                            f"{frigate_event_id} found no Unknown attempts to move",
                             flush=True,
                         )
                 except Exception as exc:
                     print(
                         f"  [faceid] early-attribution apply failed for event "
-                        f"{_frigate_event_id}: {exc}",
+                        f"{frigate_event_id}: {exc}",
                         flush=True,
                     )
 

@@ -54,6 +54,9 @@ class HAPublisher:
         self.media_base = cfg.home_assistant.get(
             "media_base_url", "http://192.168.0.139:8123/local/juggle"
         )
+        self._last_processed_event_id: Optional[str] = None
+        self._last_processed_payload: Optional[dict] = None
+        self._recent_faceid_attribution: Optional[tuple[str, str]] = None
         self.client = None
         if not self.enabled:
             return
@@ -428,6 +431,7 @@ class HAPublisher:
                     f"[session {result['session_id']}]",
                     flush=True,
                 )
+                self.note_last_processed_attribution(event_id, person_name)
                 # Republish updated high scores for all people so HA reflects the change.
                 people = db.list_people()
             finally:
@@ -759,6 +763,17 @@ class HAPublisher:
                 "value_template": "{{ value_json.name | default('none') }}",
                 "json_attributes_topic": f"{self.node}/last_processed",
                 "icon": "mdi:filmstrip",
+                "availability_topic": self.avail_topic,
+                "device": dev,
+            }), retain=True)
+        self.client.publish(
+            f"{self.prefix}/sensor/{self.node}/last_processed_person/config",
+            json.dumps({
+                "name": "Juggle Last Processed Person",
+                "unique_id": f"{self.node}_last_processed_person",
+                "state_topic": f"{self.node}/last_processed",
+                "value_template": "{{ value_json.attributed_to | default('Unknown Juggler') }}",
+                "icon": "mdi:account-check",
                 "availability_topic": self.avail_topic,
                 "device": dev,
             }), retain=True)
@@ -1144,6 +1159,16 @@ class HAPublisher:
         if not self.enabled:
             return
         name = os.path.basename(clip_path)
+        stem = os.path.splitext(name)[0]
+        parts = stem.rsplit("_", 1)
+        event_id = parts[1] if len(parts) == 2 and parts[0].startswith("clip_") else None
+        attributed_to = list(dict.fromkeys(
+            str(s.get("person")) for s in (streaks or []) if s.get("person")
+        )) or [UNKNOWN_NAME]
+        recent = self._recent_faceid_attribution
+        if event_id and recent and recent[0] == event_id:
+            attributed_to = [recent[1]]
+            self._recent_faceid_attribution = None
         counts = [int(s.get("count", 0)) for s in (streaks or [])]
         best = max(counts) if counts else 0
         url = ""
@@ -1162,13 +1187,34 @@ class HAPublisher:
             f"{s.get('person', '?')} {s.get('count', 0)}"
             for s in (streaks or [])[:6]
         ) or "no juggles"
+        payload = {
+            "name": name,
+            "video_url": url,
+            "best": best,
+            "attempts": len(counts),
+            "summary": summary,
+            "attributed_to": ", ".join(attributed_to),
+            "ts": int(time.time()),
+        }
+        self._last_processed_event_id = event_id
+        self._last_processed_payload = payload
         self.client.publish(
             f"{self.node}/last_processed",
-            json.dumps({"name": name, "video_url": url, "best": best,
-                        "attempts": len(counts), "summary": summary,
-                        "ts": int(time.time())}), retain=True)
+            json.dumps(payload), retain=True)
         print(f"  [last] {name}: best {best}, {len(counts)} attempts"
               f"{' (video)' if url else ' (no inline video)'}", flush=True)
+
+    def note_last_processed_attribution(self, event_id: str,
+                                        person_name: str) -> None:
+        """Update the latest clip's attribution when FaceID arrives late."""
+        self._recent_faceid_attribution = (event_id, person_name)
+        if (event_id != self._last_processed_event_id
+                or self._last_processed_payload is None):
+            return
+        self._last_processed_payload["attributed_to"] = person_name
+        self.client.publish(
+            f"{self.node}/last_processed",
+            json.dumps(self._last_processed_payload), retain=True)
 
     def _update_reprocess_thumb(self) -> None:
         """Generate + publish a poster thumbnail for the currently selected

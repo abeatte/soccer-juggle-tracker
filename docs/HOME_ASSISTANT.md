@@ -18,6 +18,12 @@ For each enrolled person, on the first processed clip:
 |---|---|---|
 | `sensor.<person>_juggle_high_score` | `sensor.kid1_juggle_high_score` | All-time best streak (unit: juggles) |
 
+The `sensor.juggle_last_processed_person` entity shows who the most recently
+completed clip was attributed to. It reads **Unknown Juggler** when no person
+was identified; if FaceID recognizes the clip later, the sensor updates to that
+person automatically. The companion `sensor.juggle_last_processed` shows the
+clip filename and summary.
+
 The high-score sensor also carries a **`video_url`** attribute (and `updated`)
 pointing at that kid's most-recent high-score replay clip — see
 [High-score replay videos](#high-score-replay-videos) below.
@@ -347,6 +353,8 @@ reprocess control:
 |---|---|
 | `sensor.juggle_inbox_queue` | Count of clips waiting in the inbox (state), with a `files` attribute listing them |
 | `sensor.juggle_processed_count` | Count of already-processed clips (state) + `files` attribute (newest first, capped at 100) |
+| `sensor.juggle_last_processed_person` | Person attributed to the most recently completed clip; updates if FaceID identifies it later |
+| `sensor.juggle_last_processed` | Filename and summary of the most recently completed clip |
 | `select.juggle_reprocess_file` | Dropdown of processed filenames (refreshed each cycle) |
 | `button.reprocess_selected_clip` | Re-runs the selected clip |
 | `switch.juggle_annotate_on_reprocess` | When ON, the next reprocess also writes a viewable annotated replay |
@@ -376,6 +384,8 @@ title: 📥 Queue & Reprocess
 entities:
   - entity: sensor.juggle_inbox_queue
   - entity: sensor.juggle_processed_count
+  - entity: sensor.juggle_last_processed_person
+  - entity: sensor.juggle_last_processed
   - type: divider
   - entity: select.juggle_reprocess_file
   - entity: switch.juggle_annotate_on_reprocess
