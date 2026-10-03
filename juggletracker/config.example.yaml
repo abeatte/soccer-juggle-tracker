@@ -106,6 +106,7 @@ home_assistant:
   mqtt_port: 1883
   mqtt_user: "mqtt_user"
   mqtt_password: <password>
+  frigate_api_url: "http://127.0.0.1:5000"  # Frigate event API, reachable from tracker host
   discovery_prefix: "homeassistant"   # HA MQTT discovery topic root
   node_id: "front_yard_soccer_juggle_tracker"
   media_base_url: "http://<HA_IP>:8123/local/juggle"

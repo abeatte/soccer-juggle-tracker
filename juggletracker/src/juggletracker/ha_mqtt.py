@@ -22,6 +22,7 @@ import subprocess
 import time
 from typing import Optional
 from urllib.parse import quote
+from urllib.request import Request, urlopen
 
 from . import config as cfgmod
 from .db import Database, UNKNOWN_NAME
@@ -366,10 +367,14 @@ class HAPublisher:
         if len(parts) != 4:
             return
         event_id = parts[3]
+        if event_id in {"active", "snapshot"}:
+            return
 
         try:
             payload = json.loads(raw_payload)
         except (UnicodeDecodeError, json.JSONDecodeError):
+            return
+        if not isinstance(payload, dict):
             return
 
         person_name = payload.get("sub_label", "").strip()
@@ -447,6 +452,34 @@ class HAPublisher:
         if not event_id:
             return None
         return self._pending_faceid.pop(event_id, None)
+
+    def lookup_frigate_sub_label(self, event_id: str) -> Optional[str]:
+        """Fetch Frigate's current sub_label for an event, if available."""
+        if not self._faceid_enabled or not event_id:
+            return None
+        api_url = self.cfg.home_assistant.get(
+            "frigate_api_url", "http://127.0.0.1:5000"
+        ).rstrip("/")
+        request = Request(
+            f"{api_url}/api/events/{quote(event_id, safe='')}",
+            headers={"Accept": "application/json"},
+        )
+        try:
+            with urlopen(request, timeout=4) as response:
+                event = json.load(response)
+        except Exception as exc:
+            print(f"  [faceid] Frigate lookup failed for {event_id}: {exc}",
+                  flush=True)
+            return None
+        person_name = event.get("sub_label") if isinstance(event, dict) else None
+        if not isinstance(person_name, str) or not person_name.strip():
+            print(f"  [faceid] Frigate event {event_id} has no sub_label",
+                  flush=True)
+            return None
+        person_name = person_name.strip()
+        print(f"  [faceid] Frigate event {event_id} sub_label is '{person_name}'",
+              flush=True)
+        return person_name
 
     # ------------------------------------------------------------------
     def announce_calibration(self) -> None:

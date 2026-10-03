@@ -492,7 +492,10 @@ In FaceID's HA configuration panel, add each person you want to track:
 > selected). If the kid is running away or facing away at that moment, FaceID
 > won't fire a label. Sessions where it doesn't fire stay as Unknown Juggler.
 > After correcting or adding the event's FaceID label, select the archived clip
-> in **Queue & Reprocess** and run it again to apply the latest label.
+> in **Queue & Reprocess** and run it again to apply the latest label. At the
+> end of processing, the worker also queries Frigate's event API if no MQTT or
+> cached label is available. Frigate must still have a nonempty `sub_label` for
+> that event.
 
 ### Step 3 — enable FaceID listening in the juggle tracker
 
@@ -501,7 +504,11 @@ In `juggletracker/config.yaml`:
 ```yaml
 home_assistant:
   faceid_enabled: true
+  frigate_api_url: "http://127.0.0.1:5000"
 ```
+
+Set `JUGGLE_FRIGATE_URL` in the worker's `.env` if Frigate's API is not
+reachable at `http://127.0.0.1:5000` from the tracker host.
 
 Then restart the worker:
 
@@ -552,9 +559,10 @@ seconds.
 ### What happens if FaceID doesn't fire
 
 Sessions stay attributed to **Unknown Juggler** until FaceID provides a label.
-The score and replay are still saved. Once the FaceID label is corrected, use
-**Queue & Reprocess** on the archived clip; the tracker reuses the latest label
-it received for that Frigate event when processing the clip again.
+The score and replay are still saved. At processing completion the worker uses
+the latest received/cached label, or queries Frigate's event API as a fallback.
+If correcting FaceID does not update Frigate's event `sub_label`, publish a new
+FaceID MQTT event or reprocess after the event API reports the corrected label.
 
 ### MQTT topic format (FaceID publishes)
 

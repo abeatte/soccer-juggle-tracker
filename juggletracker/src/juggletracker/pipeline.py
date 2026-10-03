@@ -24,7 +24,7 @@ import numpy as np
 from .capture import FrameSource
 from .config import Config
 from .ball_tracker import BallTracker
-from .db import Database
+from .db import Database, UNKNOWN_NAME
 from .detect import Detector, ClassicalBallDetector
 from .ha_mqtt import HAPublisher, _slug
 from .juggle import JuggleCounter
@@ -48,6 +48,27 @@ class ClipResult:
     streaks: list[dict]
     new_high_scores: list[dict]
     annotated: bool = False
+
+
+def _apply_faceid_attribution(db: Database, ha: HAPublisher,
+                              session_id: int,
+                              event_id: Optional[str]) -> tuple[Optional[str], Optional[dict]]:
+    """Resolve and apply an event label after its attempts have been committed."""
+    if not event_id:
+        return None, None
+
+    person_name = ha.consume_pending_faceid(event_id)
+    if (person_name is None
+            and not db.session_has_attributed_attempt(session_id)):
+        person_name = db.faceid_label(event_id)
+    if (person_name is None
+            and not db.session_has_attributed_attempt(session_id)):
+        person_name = ha.lookup_frigate_sub_label(event_id)
+    if not person_name:
+        return None, None
+
+    db.remember_faceid_label(event_id, person_name)
+    return person_name, db.reassign_session_by_event(event_id, person_name)
 
 
 def _nearest_person_to_ball(persons, ball_xy):
@@ -336,57 +357,54 @@ class Pipeline:
         if writer is not None:
             writer.release()
 
-        # Capture a replay clip for any new personal record BEFORE publishing,
-        # so the sensor attributes carry the fresh video URL.
-        if new_highs:
-            self._capture_highscore_videos(clip_path, new_highs)
-
-        # Apply any FaceID attribution that arrived before we finished writing
-        # attempts (the early-arrival race condition).  If FaceID fired while
-        # the clip was still being processed, _on_faceid_event stored the name
-        # in _pending_faceid instead of dropping it.  We apply it now, after all
-        # attempts are committed, so sync_all() below publishes the correct
-        # person's scores rather than Unknown Juggler.
         if frigate_event_id:
-            pending_name = self.ha.consume_pending_faceid(frigate_event_id)
-            if pending_name is not None:
-                try:
-                    result = self.db.reassign_session_by_event(
-                        frigate_event_id, pending_name
-                    )
+            try:
+                person_name, result = _apply_faceid_attribution(
+                    self.db, self.ha, session_id, frigate_event_id
+                )
+                if person_name is not None:
                     if result is not None:
                         self.ha.note_last_processed_attribution(
-                            frigate_event_id, pending_name
+                            frigate_event_id, person_name
                         )
                         print(
-                            f"  [faceid] applied early attribution: "
+                            f"  [faceid] applied attribution: "
                             f"{result['moved_count']} attempt(s) "
-                            f"(best: {result['best_count']}) -> '{pending_name}' "
+                            f"(best: {result['best_count']}) -> '{person_name}' "
                             f"[session {result['session_id']}]",
                             flush=True,
                         )
-                        # Refresh new_highs: if the moved best beats the person's
-                        # existing record a new-high-score event should fire.
+                        # The streaks were initially credited to Unknown. Keep
+                        # only the resolved person's new high, if it has one.
+                        new_highs = [
+                            high for high in new_highs
+                            if high["person"] != UNKNOWN_NAME
+                        ]
                         if result.get("new_high"):
                             new_highs.append({
-                                "person": pending_name,
+                                "person": person_name,
                                 "score": result["best_count"],
-                                "pid": self.db.add_person(pending_name),
+                                "pid": self.db.add_person(person_name),
                             })
-                            # Re-save the high-score replay under the correct name.
-                            self._capture_highscore_videos(clip_path, new_highs[-1:])
                     else:
                         print(
-                            f"  [faceid] pending attribution for event "
+                            f"  [faceid] attribution for event "
                             f"{frigate_event_id} found no Unknown attempts to move",
                             flush=True,
                         )
-                except Exception as exc:
-                    print(
-                        f"  [faceid] early-attribution apply failed for event "
-                        f"{frigate_event_id}: {exc}",
-                        flush=True,
-                    )
+            except Exception as exc:
+                print(
+                    f"  [faceid] end-of-processing attribution failed for event "
+                    f"{frigate_event_id}: {exc}",
+                    flush=True,
+                )
+
+        if self.db.session_has_attributed_attempt(session_id):
+            new_highs = [
+                high for high in new_highs if high["person"] != UNKNOWN_NAME
+            ]
+        if new_highs:
+            self._capture_highscore_videos(clip_path, new_highs)
 
         # Publish to Home Assistant.
         self.ha.sync_all(self.db.list_people())

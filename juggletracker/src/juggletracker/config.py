@@ -266,6 +266,7 @@ def _apply_environment_overrides(data: dict[str, Any]) -> None:
         ("mqtt_host", "JUGGLE_MQTT_HOST"),
         ("mqtt_user", "JUGGLE_MQTT_USER"),
         ("mqtt_password", "JUGGLE_MQTT_PASSWORD"),
+        ("frigate_api_url", "JUGGLE_FRIGATE_URL"),
     ):
         home_assistant[key] = value(env_name, home_assistant.get(key))
     if os.environ.get("JUGGLE_MQTT_PORT"):

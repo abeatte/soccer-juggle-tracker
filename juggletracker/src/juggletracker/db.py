@@ -136,6 +136,15 @@ class Database:
         ).fetchone()
         return str(row["person_name"]) if row else None
 
+    def session_has_attributed_attempt(self, session_id: int) -> bool:
+        """Return whether this session has an attempt assigned to a known person."""
+        row = self.conn.execute(
+            "SELECT 1 FROM attempts WHERE session_id = ? AND person_id IS NOT NULL "
+            "AND person_id != ? LIMIT 1",
+            (session_id, self.unknown_person_id),
+        ).fetchone()
+        return row is not None
+
     def backfill_unknown_attempts(self) -> tuple[int, int]:
         """One-time: credit historical unattributed (NULL) attempts to the
         Unknown Juggler profile and recompute its high score.
