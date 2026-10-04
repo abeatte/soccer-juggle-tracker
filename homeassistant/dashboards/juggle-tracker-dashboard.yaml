@@ -77,8 +77,75 @@ sections:
           - type: entities
             title: ⚙️ Processing Stats ⚙️
             entities:
-              - entity: sensor.juggle_inbox_queue
-                name: Inbox queue
+              - type: custom:fold-entity-row
+                head:
+                  entity: sensor.juggle_inbox_queue
+                  name: Inbox Queue
+                entities:
+                  - type: custom:auto-entities
+                    card:
+                      type: grid
+                      columns: 1
+                      square: false
+                    grid_options:
+                      columns: full
+                    card_param: cards
+                    filter:
+                      template: >-
+                        {% set queue = states['sensor.juggle_inbox_queue'] %}
+                        {% set clips = queue.attributes.get('clips', []) if queue else [] %}
+                        {% set result = namespace(cards=[]) %}
+                        {% for clip in clips %}
+                          {% set card = {
+                            'type': 'custom:button-card',
+                            'label': clip.duration,
+                            'variables': {
+                              'thumbnail': clip.thumbnail_url,
+                              'filename': clip.name,
+                              'duration': clip.duration
+                            },
+                            'show_name': false,
+                            'show_label': false,
+                            'show_icon': false,
+                            'show_state': false,
+                            'custom_fields': {
+                              'content': '[[[ const image = variables.thumbnail ? `<img src="${variables.thumbnail}" style="display:block;width:100%;max-width:640px;aspect-ratio:16/9;height:auto;object-fit:cover;border-radius:4px">` : `<ha-icon icon="mdi:video-off-outline"></ha-icon>`; return `<div style="display:flex;flex-direction:column;align-items:center;gap:8px;width:100%;box-sizing:border-box">${image}<div style="display:block;width:100%;text-align:left;color:var(--secondary-text-color);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;direction:rtl">${variables.filename} - ${variables.duration}</div></div>`; ]]]'
+                            },
+                            'tap_action': {
+                              'action': 'perform-action',
+                              'perform_action': 'mqtt.publish',
+                              'data': {
+                                'topic': 'juggle_tracker/delete_file/set',
+                                'payload': clip.name,
+                                'qos': 0,
+                                'retain': false
+                              },
+                              'confirmation': {
+                                'text': 'Delete ' ~ clip.name ~ ' from the inbox?'
+                              }
+                            },
+                            'styles': {
+                              'card': ['min-height: 170px', 'width: 100%', 'padding: 12px', 'cursor: pointer'],
+                              'grid': [
+                                'grid-template-areas: "content"',
+                                'grid-template-columns: minmax(0, 1fr)',
+                                'grid-template-rows: auto',
+                                'justify-items: stretch'
+                              ],
+                              'custom_fields': {
+                                'content': [
+                                  'grid-area: content',
+                                  'justify-self: stretch',
+                                  'display: block',
+                                  'width: 100%',
+                                  'box-sizing: border-box'
+                                ]
+                              }
+                            }
+                          } %}
+                          {% set result.cards = result.cards + [card] %}
+                        {% endfor %}
+                        {{ result.cards if result.cards else [{'type': 'markdown', 'content': 'No videos are waiting in the inbox.'}] }}
               - type: divider
               - type: custom:entity-progress-card
                 entity: sensor.soccer_juggle_tracker_juggle_processing_progress
@@ -325,88 +392,6 @@ sections:
             grid_options:
               rows: auto
               columns: full
-
-    visibility:
-      - condition: user
-        users:
-          - d0f74d3b9c434882829a4a12a467bb22
-
-  # ── Inbox management ───────────────────────────────────────────────────────
-  - type: grid
-    cards:
-      - type: vertical-stack
-        grid_options:
-          columns: full
-        cards:
-          - type: entities
-            title: 🗑️ Inbox Queue
-            entities:
-              - entity: sensor.juggle_inbox_queue
-                name: Waiting to process
-          - type: custom:auto-entities
-            card:
-              type: grid
-              columns: 1
-              square: false
-            grid_options:
-              columns: full
-            card_param: cards
-            filter:
-              template: >-
-                {% set queue = states['sensor.juggle_inbox_queue'] %}
-                {% set clips = queue.attributes.get('clips', []) if queue else [] %}
-                {% set result = namespace(cards=[]) %}
-                {% for clip in clips %}
-                  {% set card = {
-                    'type': 'custom:button-card',
-                    'label': clip.duration,
-                    'variables': {
-                      'thumbnail': clip.thumbnail_url,
-                      'filename': clip.name,
-                      'duration': clip.duration
-                    },
-                    'show_name': false,
-                    'show_label': false,
-                    'show_icon': false,
-                    'show_state': false,
-                    'custom_fields': {
-                      'content': '[[[ const image = variables.thumbnail ? `<img src="${variables.thumbnail}" style="display:block;width:100%;max-width:640px;aspect-ratio:16/9;height:auto;object-fit:cover;border-radius:4px">` : `<ha-icon icon="mdi:video-off-outline"></ha-icon>`; return `<div style="display:flex;flex-direction:column;align-items:center;gap:8px;width:100%;box-sizing:border-box">${image}<div style="display:block;width:100%;text-align:left;color:var(--secondary-text-color);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;direction:rtl">${variables.filename} - ${variables.duration}</div></div>`; ]]]'
-                    },
-                    'tap_action': {
-                      'action': 'perform-action',
-                      'perform_action': 'mqtt.publish',
-                      'data': {
-                        'topic': 'juggle_tracker/delete_file/set',
-                        'payload': clip.name,
-                        'qos': 0,
-                        'retain': false
-                      },
-                      'confirmation': {
-                        'text': 'Delete ' ~ clip.name ~ ' from the inbox?'
-                      }
-                    },
-                    'styles': {
-                      'card': ['min-height: 170px', 'width: 100%', 'padding: 12px', 'cursor: pointer'],
-                      'grid': [
-                        'grid-template-areas: "content"',
-                        'grid-template-columns: minmax(0, 1fr)',
-                        'grid-template-rows: auto',
-                        'justify-items: stretch'
-                      ],
-                      'custom_fields': {
-                        'content': [
-                          'grid-area: content',
-                          'justify-self: stretch',
-                          'display: block',
-                          'width: 100%',
-                          'box-sizing: border-box'
-                        ]
-                      }
-                    }
-                  } %}
-                  {% set result.cards = result.cards + [card] %}
-                {% endfor %}
-                {{ result.cards if result.cards else [{'type': 'markdown', 'content': 'No videos are waiting in the inbox.'}] }}
 
     visibility:
       - condition: user
