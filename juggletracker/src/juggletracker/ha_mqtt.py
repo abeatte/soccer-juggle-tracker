@@ -89,7 +89,10 @@ class HAPublisher:
         self._last_processed_event_id: Optional[str] = None
         self._last_processed_payload: Optional[dict] = None
         self._recent_faceid_attribution: Optional[tuple[str, str]] = None
-        self._pending_faceid: dict[str, str] = {}
+        # Query Frigate's event API after each clip (no MQTT FaceID listener).
+        self._faceid_enabled = bool(
+            cfg.home_assistant.get("faceid_enabled", False)
+        )
         self.client = None
         if not self.enabled:
             return
@@ -164,19 +167,6 @@ class HAPublisher:
         self.announce_queues()
         self.publish_queues()
         self._retire_reassign_entities()
-        # FaceID async re-attribution: subscribe to Frigate sub_label updates.
-        # FaceID (HACS) publishes to frigate/<camera>/person/<event_id> with
-        # a JSON payload containing a "sub_label" field (the recognised name).
-        # Topic pattern: frigate/+/person/+ (wildcard camera + event_id).
-        # Disabled by default; set home_assistant.faceid_enabled: true in config
-        # to activate. This allows testing without FaceID installed.
-        self._faceid_enabled = bool(
-            cfg.home_assistant.get("faceid_enabled", False)
-        )
-        if self._faceid_enabled:
-            self.client.subscribe("frigate/+/person/+", qos=1)
-            print("  [faceid] subscribed to frigate/+/person/+ sub_label events",
-                  flush=True)
 
     # ------------------------------------------------------------------
     def _device(self) -> dict:
@@ -258,10 +248,6 @@ class HAPublisher:
         """Route inbound MQTT commands (reset / calibration set / apply / revert)."""
         try:
             topic = msg.topic
-            if (self._faceid_enabled and topic.startswith("frigate/")
-                    and "/person/" in topic):
-                self._on_faceid_event(topic, msg.payload)
-                return
             payload = msg.payload.decode().strip()
             if topic == self.cmd_topic:
                 if payload:
@@ -343,103 +329,6 @@ class HAPublisher:
         print(f"  [reset] {name}: high score cleared and replay removed",
               flush=True)
 
-    # ------------------------------------------------------------------
-    def _on_faceid_event(self, topic: str, raw_payload: bytes) -> None:
-        """Handle a FaceID sub_label event from Frigate.
-
-        FaceID (HACS integration) publishes to:
-            frigate/<camera>/person/<event_id>
-        with a JSON payload like:
-            {"sub_label": "Kid1", "score": 0.87, ...}
-
-        When a sub_label arrives for an event we already processed (and bucketed
-        to Unknown Juggler), we re-attribute that session's attempts to the named
-        person and republish scores to HA.
-
-        Runs in the MQTT network thread — uses its own SQLite connection."""
-        # Parse topic: frigate/<camera>/person/<event_id>
-        parts = topic.split("/")
-        if len(parts) != 4:
-            return
-        event_id = parts[3]
-        if event_id in {"active", "snapshot"}:
-            return
-
-        try:
-            payload = json.loads(raw_payload)
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            return
-        if not isinstance(payload, dict):
-            return
-
-        person_name = payload.get("sub_label", "").strip()
-        if not person_name:
-            # FaceID fired but couldn't identify anyone — ignore.
-            return
-
-        print(f"  [faceid] event {event_id} identified as '{person_name}'",
-              flush=True)
-
-        try:
-            db = Database(self.cfg.database.path)
-            try:
-                result = db.reassign_session_by_event(event_id, person_name)
-                if result is None:
-                    # reassign_session_by_event returns None for two distinct
-                    # reasons:
-                    #   a) The clip is currently in-flight or queued — the
-                    #      session/attempts haven't been written yet.  Park the
-                    #      attribution; pipeline.process() will apply it at the
-                    #      end of the clip via consume_pending_faceid().
-                    #   b) Nothing is queued for this event_id.  The clip was
-                    #      either never received, already fully processed with no
-                    #      Unknown attempts remaining, or the event_id is
-                    #      unrecognised.  Parking would leave the entry in
-                    #      _pending_faceid forever, so we drop it instead.
-                    queued = (
-                        self._worker is not None
-                        and self._worker.is_event_queued(event_id)
-                    )
-                    if queued:
-                        self._pending_faceid[event_id] = person_name
-                        print(
-                            f"  [faceid] event {event_id}: clip is queued/in-flight; "
-                            f"stored pending attribution for '{person_name}'",
-                            flush=True,
-                        )
-                    else:
-                        print(
-                            f"  [faceid] event {event_id}: no queued clip and no "
-                            f"Unknown attempts found; dropping attribution for "
-                            f"'{person_name}'",
-                            flush=True,
-                        )
-                self.note_last_processed_attribution(event_id, person_name)
-                # Republish updated high scores for all people so HA reflects the change.
-                people = db.list_people()
-            finally:
-                db.close()
-        except Exception as exc:
-            print(f"  [faceid] re-attribution failed for event {event_id}: {exc}",
-                  flush=True)
-            return
-
-        self.sync_all(people)
-        if result.get("new_high"):
-            self.fire_new_high_score(person_name, result["best_count"])
-
-    def consume_pending_faceid(self, event_id: Optional[str]) -> Optional[str]:
-        """Pop and return a pending FaceID person_name for this event_id, or None.
-
-        Called by ``pipeline.process()`` at the end of a clip, after attempts
-        have been committed to the DB. If FaceID fired early (before the clip
-        finished processing), the person_name was stored here; the pipeline
-        applies the attribution and publishes scores under the correct name
-        instead of Unknown Juggler."""
-        if not event_id:
-            return None
-        return self._pending_faceid.pop(event_id, None)
-
     def lookup_frigate_sub_label(self, event_id: str) -> Optional[str]:
         """Fetch Frigate's current sub_label for an event, if available."""
         if not self._faceid_enabled or not event_id:
@@ -458,12 +347,14 @@ class HAPublisher:
             print(f"  [faceid] Frigate lookup failed for {event_id}: {exc}",
                   flush=True)
             return None
-        person_name = event.get("sub_label") if isinstance(event, dict) else None
-        if not isinstance(person_name, str) or not person_name.strip():
+        raw = event.get("sub_label") if isinstance(event, dict) else None
+        if isinstance(raw, (list, tuple)) and raw:
+            raw = raw[0]
+        if not isinstance(raw, str) or not raw.strip():
             print(f"  [faceid] Frigate event {event_id} has no sub_label",
                   flush=True)
             return None
-        person_name = person_name.strip()
+        person_name = raw.strip()
         print(f"  [faceid] Frigate event {event_id} sub_label is '{person_name}'",
               flush=True)
         return person_name
@@ -879,29 +770,7 @@ class HAPublisher:
         if not os.path.isfile(src):
             print(f"  [reprocess] '{name}' not found in processed", flush=True)
             return
-        event_id = _event_id_from_filename(name)
-        pending_label = None
-        if event_id:
-            try:
-                attrs = Database.clip_attributions_from_path(
-                    self.cfg.database.path, [name]
-                )
-                # Pick the first known (non-Unknown) person attributed to this
-                # clip from a previous run.  If everything was Unknown, leave it
-                # unset — the Frigate API fallback in _apply_faceid_attribution
-                # will query for a label at end-of-clip.
-                people = [
-                    p for p in attrs.get(name, [])
-                    if p != UNKNOWN_NAME
-                ]
-                if people:
-                    pending_label = people[0]
-            except Exception as exc:
-                print(f"  [reprocess] prior-attribution lookup failed for "
-                      f"{event_id}: {exc}", flush=True)
         try:
-            if pending_label and event_id:
-                self._pending_faceid[event_id] = pending_label
             os.makedirs(inbox, exist_ok=True)
             dst = os.path.join(inbox, name)
             shutil.copy2(src, dst)
@@ -921,9 +790,6 @@ class HAPublisher:
                                 retain=True)
             self._update_reprocess_preview()  # clear the stale preview
         except Exception as exc:
-            if (pending_label and event_id
-                    and self._pending_faceid.get(event_id) == pending_label):
-                self._pending_faceid.pop(event_id, None)
             print(f"  [reprocess] failed to requeue '{name}': {exc}", flush=True)
 
     def _do_delete_inbox(self) -> None:

@@ -19,9 +19,9 @@ For each enrolled person, on the first processed clip:
 | `sensor.<person>_juggle_high_score` | `sensor.kid1_juggle_high_score` | All-time best streak (unit: juggles) |
 
 The `sensor.juggle_last_processed_person` entity shows who the most recently
-completed clip was attributed to. It reads **Unknown Juggler** when no person
-was identified; if FaceID recognizes the clip later, the sensor updates to that
-person automatically. The companion `sensor.juggle_last_processed` shows the
+completed clip was attributed to. It reads **Unknown Juggler** when Frigate had
+no `sub_label` at the end of processing. Reprocess the clip after FaceID labels
+the event to update it. The companion `sensor.juggle_last_processed` shows the
 clip filename and summary.
 
 The high-score sensor also carries a **`video_url`** attribute (and `updated`)
@@ -359,7 +359,7 @@ reprocess control:
 |---|---|
 | `sensor.juggle_inbox_queue` | Count of clips waiting in the inbox (state), with a `files` attribute listing them |
 | `sensor.juggle_processed_count` | Count of already-processed clips (state) + `files` attribute (newest first, capped at 100) |
-| `sensor.juggle_last_processed_person` | Person attributed to the most recently completed clip; updates if FaceID identifies it later |
+| `sensor.juggle_last_processed_person` | Person attributed to the most recently completed clip (from Frigate's event `sub_label` at end of processing) |
 | `sensor.juggle_last_processed` | Filename, result summary, replay URL, and `annotated` flag for the most recently completed clip |
 | `select.juggle_reprocess_file` | Dropdown of processed filenames (refreshed each cycle) |
 | `button.reprocess_selected_clip` | Re-runs the selected clip |
@@ -455,13 +455,14 @@ mode: queued
 > after the session ends (when the clip finishes processing), not the instant the
 > record is set.
 
-## FaceID — async person identification
+## FaceID — person identification
 
 The juggle tracker no longer runs InsightFace in-process. Instead, it buckets
-every session to **Unknown Juggler** immediately after processing, then listens
-for Frigate's [FaceID Community integration](https://github.com/SkyTechNerds/faceid)
-to publish a `sub_label` over MQTT. When that arrives, the worker re-attributes
-the session's attempts to the named person and republishes scores.
+every session to **Unknown Juggler** while counting, then at the **end of
+processing** queries Frigate's event API for the current `sub_label` written by
+the [FaceID Community integration](https://github.com/SkyTechNerds/faceid).
+If a name is present, the worker reassigns that session's attempts and publishes
+scores under the identified person.
 
 This frees the juggle worker from loading ~300 MB of face-model weights on the
 already-constrained CPU, and lets FaceID handle person management through the HA
@@ -474,7 +475,7 @@ UI instead of the CLI `enroll` command.
 2. Restart Home Assistant.
 3. Go to **Settings → Devices & Services → Add Integration** → search `FaceID`
    → follow the setup flow. You'll need your Frigate URL (e.g.
-   `http://frigate:5000`) and the same MQTT broker the juggle tracker uses.
+   `http://frigate:5000`).
 
 ### Step 2 — enroll known people in FaceID
 
@@ -492,12 +493,10 @@ In FaceID's HA configuration panel, add each person you want to track:
 > selected). If the kid is running away or facing away at that moment, FaceID
 > won't fire a label. Sessions where it doesn't fire stay as Unknown Juggler.
 > After correcting or adding the event's FaceID label, select the archived clip
-> in **Queue & Reprocess** and run it again to apply the latest label. At the
-> end of processing, the worker also queries Frigate's event API if no MQTT or
-> cached label is available. Frigate must still have a nonempty `sub_label` for
-> that event.
+> in **Queue & Reprocess** and run it again so the worker reads Frigate's
+> updated `sub_label`.
 
-### Step 3 — enable FaceID listening in the juggle tracker
+### Step 3 — enable Frigate lookup in the juggle tracker
 
 In `juggletracker/config.yaml`:
 
@@ -516,68 +515,37 @@ Then restart the worker:
 systemctl --user restart juggle-tracker.service
 ```
 
-Confirm in the logs:
-
-```bash
-journalctl --user -u juggle-tracker.service -n 20
-# Should contain:
-#   [faceid] subscribed to frigate/+/person/+ sub_label events
-```
-
 ### Step 4 — verify end-to-end
 
-The easiest way to confirm the plumbing works **without waiting for FaceID** is
-to publish a synthetic `sub_label` manually.
-
-First, find a real Frigate event ID that the tracker has already processed:
+Find a real Frigate event ID that the tracker has already processed:
 
 ```bash
 sqlite3 ~/path/to/data/juggle.db \
   "SELECT frigate_event_id, clip_path FROM sessions ORDER BY id DESC LIMIT 5;"
 ```
 
-Then publish a fake recognition:
+Confirm Frigate has a label for that event:
 
 ```bash
-mosquitto_pub -h localhost -u <mqtt_user> -P <mqtt_password> \
-  -t "frigate/back_yard/person/<event_id_from_above>" \
-  -m '{"sub_label": "Kid1", "score": 0.91}'
+curl -s "http://127.0.0.1:5000/api/events/<event_id>" | python3 -c \
+  "import json,sys; print(json.load(sys.stdin).get('sub_label'))"
 ```
 
-Watch the tracker log:
+Then reprocess that clip from **Queue & Reprocess**. The tracker log should show:
 
-```bash
-journalctl --user -u juggle-tracker.service -f
-# Should show:
-#   [faceid] event <id> identified as 'Kid1'
-#   [faceid] re-attributed 2 attempt(s) (best: 7) to 'Kid1' [session 42]
+```
+  [faceid] Frigate event <id> sub_label is 'Kid1'
+  [faceid] applied attribution: 2 attempt(s) (best: 7) -> 'Kid1' [session 42]
 ```
 
-And verify that `sensor.kid1_juggle_high_score` updates in HA within a few
-seconds.
+And `sensor.kid1_juggle_high_score` should update in HA.
 
 ### What happens if FaceID doesn't fire
 
-Sessions stay attributed to **Unknown Juggler** until FaceID provides a label.
-The score and replay are still saved. At processing completion the worker uses
-the latest received/cached label, or queries Frigate's event API as a fallback.
-If correcting FaceID does not update Frigate's event `sub_label`, publish a new
-FaceID MQTT event or reprocess after the event API reports the corrected label.
-
-### MQTT topic format (FaceID publishes)
-
-```
-frigate/<camera_name>/person/<event_id>
-```
-
-Payload (JSON):
-```json
-{"sub_label": "Kid1", "score": 0.87, "camera": "back_yard", "id": "<event_id>"}
-```
-
-The juggle worker uses `sub_label` and extracts `<event_id>` from the topic. The
-`score` field is logged but not used as a confidence threshold (FaceID's own
-confidence filtering is configured inside FaceID).
+Sessions stay attributed to **Unknown Juggler**. The score and replay are still
+saved. Correct the label in FaceID so Frigate's event `sub_label` is nonempty,
+then reprocess the archived clip. The tracker does not listen for later MQTT
+FaceID events.
 
 ### Note on the hardware constraint
 

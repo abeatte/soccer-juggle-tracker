@@ -51,26 +51,13 @@ class ClipResult:
 
 
 def _apply_faceid_attribution(db: Database, ha: HAPublisher,
-                              session_id: int,
                               event_id: Optional[str]) -> tuple[Optional[str], Optional[dict]]:
-    """Resolve and apply an event label after its attempts have been committed.
-
-    Resolution order:
-      1. In-memory pending dict (FaceID fired while the clip was in-flight).
-      2. Frigate API fallback (authoritative; queries Frigate's own event store).
-    The faceid_labels DB cache is no longer needed now that the Frigate API
-    provides the same data without a separate persistence layer.
-    """
+    """Apply Frigate's current event sub_label after attempts are committed."""
     if not event_id:
         return None, None
-
-    person_name = ha.consume_pending_faceid(event_id)
-    if (person_name is None
-            and not db.session_has_attributed_attempt(session_id)):
-        person_name = ha.lookup_frigate_sub_label(event_id)
+    person_name = ha.lookup_frigate_sub_label(event_id)
     if not person_name:
         return None, None
-
     return person_name, db.reassign_session_by_event(event_id, person_name)
 
 
@@ -219,28 +206,6 @@ class Pipeline:
             return True
         return False
 
-    def is_event_queued(self, event_id: str) -> bool:
-        """Return True if a clip for *event_id* is currently in-flight or sitting
-        in the inbox directory waiting to be processed.
-
-        Used by the FaceID MQTT handler to decide whether to park a pending
-        attribution (clip will be processed soon) or drop it (nothing will ever
-        consume it).  Clip filenames follow the Frigate inbox-bridge convention:
-        ``clip_{camera}_{event_id}.mp4``."""
-        if not event_id:
-            return False
-        # Check the clip currently being processed.
-        cur = self._cur_clip
-        if cur and _frigate_event_id(cur) == event_id:
-            return True
-        # Check the inbox directory for a queued clip.
-        inbox = self.cfg.capture.get("inbox_dir")
-        if inbox and os.path.isdir(inbox):
-            for fname in os.listdir(inbox):
-                if _frigate_event_id(fname) == event_id:
-                    return True
-        return False
-
     def process(self, clip_path: str, debug_video: Optional[str] = None,
                 trace_sink=None) -> ClipResult:
         src = FrameSource(
@@ -249,9 +214,8 @@ class Pipeline:
             infer_long_edge=int(self.cfg.processing.get("infer_long_edge", 960)),
         )
         stride = max(1, int(self.cfg.processing.get("person_stride", 3)))
-        # Extract the Frigate event ID from the clip filename so the session can
-        # be looked up later when FaceID fires a sub_label re-attribution event.
         # Filename format: clip_{camera}_{event_id}.mp4 (from the inbox bridge).
+        # After counting, the event ID is used to query Frigate for a person label.
         frigate_event_id = _frigate_event_id(clip_path)
         session_id = self.db.start_session(clip_path, src.fps,
                                            frigate_event_id=frigate_event_id)
@@ -363,7 +327,7 @@ class Pipeline:
         if frigate_event_id:
             try:
                 person_name, result = _apply_faceid_attribution(
-                    self.db, self.ha, session_id, frigate_event_id
+                    self.db, self.ha, frigate_event_id
                 )
                 if person_name is not None:
                     if result is not None:
@@ -467,8 +431,8 @@ class Pipeline:
     def _record(self, session_id, track_id, event, streaks, new_highs) -> None:
         """Attribute a completed streak to a person, persist it, and collect it
         for HA publishing. Called from process() when a streak ends."""
-        # All streaks are attributed to the Unknown Juggler catch-all profile
-        # unless re-attributed via MQTT later.
+        # Streaks start on Unknown Juggler; process() reassigns from Frigate
+        # after the clip finishes.
         pid = self.db.unknown_person_id
         is_high = self.db.record_attempt(
             session_id, pid, track_id, event.count, event.ended_reason

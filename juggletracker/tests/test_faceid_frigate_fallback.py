@@ -28,25 +28,26 @@ class FakeResponse:
 
 
 class FakeHA:
-    def __init__(self, api_label=None, pending_label=None):
+    def __init__(self, api_label=None):
         self.api_label = api_label
-        self.pending_label = pending_label
         self.lookup_count = 0
-
-    def consume_pending_faceid(self, _event_id):
-        return self.pending_label
 
     def lookup_frigate_sub_label(self, _event_id):
         self.lookup_count += 1
         return self.api_label
 
 
-def test_lookup_frigate_sub_label_reads_event_api(monkeypatch):
+def _publisher(enabled=True):
     publisher = HAPublisher.__new__(HAPublisher)
-    publisher._faceid_enabled = True
+    publisher._faceid_enabled = enabled
     publisher.cfg = SimpleNamespace(home_assistant={
         "frigate_api_url": "http://frigate.local:5000/",
     })
+    return publisher
+
+
+def test_lookup_frigate_sub_label_reads_event_api(monkeypatch):
+    publisher = _publisher()
     requests = []
 
     def fake_urlopen(request, timeout):
@@ -61,14 +62,25 @@ def test_lookup_frigate_sub_label_reads_event_api(monkeypatch):
     ]
 
 
-def test_faceid_handler_ignores_reserved_topics_and_non_object_payloads(capsys):
-    publisher = HAPublisher.__new__(HAPublisher)
+def test_lookup_frigate_sub_label_accepts_list_payload(monkeypatch):
+    publisher = _publisher()
 
-    publisher._on_faceid_event("frigate/front_yard/person/active", b"1")
-    publisher._on_faceid_event(
-        "frigate/front_yard/person/event-1", b'"not-an-object"')
+    def fake_urlopen(request, timeout):
+        return FakeResponse({"id": "event-1", "sub_label": ["Artie", 0.91]})
 
-    assert capsys.readouterr().out == ""
+    monkeypatch.setattr(ha_mqtt, "urlopen", fake_urlopen)
+
+    assert publisher.lookup_frigate_sub_label("event-1") == "Artie"
+
+
+def test_lookup_frigate_sub_label_skips_when_disabled(monkeypatch):
+    publisher = _publisher(enabled=False)
+
+    def boom(*_args, **_kwargs):
+        raise AssertionError("Frigate should not be queried when FaceID is off")
+
+    monkeypatch.setattr(ha_mqtt, "urlopen", boom)
+    assert publisher.lookup_frigate_sub_label("event-1") is None
 
 
 def test_end_of_processing_queries_frigate_and_reassigns_unknown(tmp_path):
@@ -81,49 +93,29 @@ def test_end_of_processing_queries_frigate_and_reassigns_unknown(tmp_path):
     db.record_attempt(session_id, db.unknown_person_id, 1, 14, "end")
     ha = FakeHA(api_label="Artie")
 
-    person_name, result = _apply_faceid_attribution(db, ha, session_id, event_id)
+    person_name, result = _apply_faceid_attribution(db, ha, event_id)
 
     assert person_name == "Artie"
     assert result is not None
     assert result["moved_count"] == 1
-    # Attribution is now recorded in attempts/people, not a separate cache table.
     assert db.high_scores()["Artie"] == 14
     assert db.high_scores()["Unknown Juggler"] == 0
     assert ha.lookup_count == 1
     db.close()
 
 
-def test_cached_or_pending_label_prevents_frigate_lookup(tmp_path):
+def test_missing_frigate_label_leaves_unknown(tmp_path):
     db = Database(str(tmp_path / "juggle.db"))
     event_id = "event-3"
     session_id = db.start_session("clip_front_yard_event-3.mp4", 25.0,
                                   frigate_event_id=event_id)
     db.record_attempt(session_id, db.unknown_person_id, 1, 8, "end")
-    # Pre-load the pending dict (simulates FaceID firing before clip finished).
-    ha = FakeHA(api_label="Artie", pending_label="Art")
+    ha = FakeHA(api_label=None)
 
-    person_name, result = _apply_faceid_attribution(db, ha, session_id, event_id)
-
-    assert person_name == "Art"
-    assert result is not None
-    assert db.high_scores()["Art"] == 8
-    # Frigate API was not queried because pending_label was available.
-    assert ha.lookup_count == 0
-    db.close()
-
-
-def test_already_attributed_session_skips_frigate_lookup(tmp_path):
-    db = Database(str(tmp_path / "juggle.db"))
-    event_id = "event-4"
-    session_id = db.start_session("clip_front_yard_event-4.mp4", 25.0,
-                                  frigate_event_id=event_id)
-    artie_id = db.add_person("Artie")
-    db.record_attempt(session_id, artie_id, 1, 11, "end")
-    ha = FakeHA(api_label="Art")
-
-    person_name, result = _apply_faceid_attribution(db, ha, session_id, event_id)
+    person_name, result = _apply_faceid_attribution(db, ha, event_id)
 
     assert person_name is None
     assert result is None
-    assert ha.lookup_count == 0
+    assert db.high_scores()["Unknown Juggler"] == 8
+    assert ha.lookup_count == 1
     db.close()

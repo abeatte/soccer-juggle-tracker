@@ -63,8 +63,8 @@ for full setup steps.
 
 1. Install the **Frigate FaceID** HACS integration in Home Assistant.
 2. Add each person in FaceID's HA configuration panel with 5–20 face photos.
-3. Set `home_assistant.faceid_enabled: true` in `config.yaml` and restart the
-   worker.
+3. Set `home_assistant.faceid_enabled: true` in `config.yaml` (and a reachable
+   `frigate_api_url`) and restart the worker.
 
 > Person management happens entirely in the FaceID HA panel — there
 > is no code-level limit on the number of people you can track.

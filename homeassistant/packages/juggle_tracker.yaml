@@ -102,12 +102,11 @@
 
 
 # ---------------------------------------------------------------------------
-# FaceID async re-attribution
+# FaceID person identification
 # ---------------------------------------------------------------------------
-# When FaceID (HACS) is installed and configured, Frigate publishes a
-# sub_label to  frigate/<camera>/person/<event_id>  whenever it recognises
-# someone. The juggle worker's MQTT listener picks this up and re-attributes
-# any "Unknown Juggler" attempts from that session to the named person.
+# FaceID (HACS) writes a sub_label onto the Frigate event. At the end of each
+# clip, the juggle worker queries Frigate's event API and attributes Unknown
+# Juggler attempts to that name. There is no MQTT FaceID listener.
 #
 # SETUP STEPS:
 #   1. Install the FaceID integration from HACS in Home Assistant.
@@ -116,27 +115,17 @@
 #   3. In juggletracker/config.yaml set:
 #        home_assistant:
 #          faceid_enabled: true
+#          frigate_api_url: "http://127.0.0.1:5000"
 #   4. Restart the juggle-tracker systemd service.
-#   5. Confirm the log shows:
-#        [faceid] subscribed to frigate/+/person/+ sub_label events
 #
-# TESTING WITHOUT FULL FACEID:
-#   Publish a synthetic sub_label manually from Mosquitto to confirm the
-#   re-attribution plumbing works end-to-end:
-#     mosquitto_pub -h localhost -u <user> -P <pw> \
-#       -t "frigate/back_yard/person/<event_id>" \
-#       -m '{"sub_label": "Kid1", "score": 0.91}'
-#   Replace <event_id> with a real ID visible in juggle.db sessions table:
-#     sqlite3 data/juggle.db "SELECT frigate_event_id, clip_path FROM sessions ORDER BY id DESC LIMIT 5;"
+# TESTING:
+#   curl -s "http://127.0.0.1:5000/api/events/<event_id>"
+#   Then reprocess the matching archived clip from Queue & Reprocess.
 #
-# SENSOR: monitor the last FaceID re-attribution result published by the worker.
-# The worker logs re-attributions to its stdout; this sensor surfaces the last
-# event via a retained MQTT message the worker publishes (see NOTE below).
+# NOTE: the worker does not publish a dedicated faceid topic — the
+# attribution result is visible via sensor.juggle_last_processed_person and
+# sensor.juggle_last_session after the clip finishes.
 #
-# NOTE: the worker does not currently publish a dedicated faceid topic — the
-# re-attribution result is visible via sensor.juggle_last_session (the session
-# sensor updates after sync_all is called). The stub below is a placeholder for
-# a future explicit faceid_event topic. Uncomment and adjust when added.
 #
 # mqtt:
 #   sensor:
@@ -151,10 +140,9 @@
 #         name: "Soccer Juggle Tracker"
 
 # automation:
-#   # 3) Announce when FaceID re-attributes an Unknown session to a known person.
-#   #    Fires after the juggle worker receives the sub_label and re-publishes scores.
-#   #    Trigger: the new_high_score event (re-attribution only fires this when the
-#   #    re-attributed score beats the person's previous record).
+#   # 3) Announce when a clip is attributed to a named person and sets a record.
+#   #    Trigger: the new_high_score event (fired when the attributed score
+#   #    beats the person's previous record).
 #   - id: juggle_faceid_reattribution_announce
 #     alias: "Juggle: announce FaceID re-attribution high score"
 #     trigger:

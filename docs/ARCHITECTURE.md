@@ -44,8 +44,8 @@ flowchart LR
     K --> L[SQLite database\nUnknown Juggler bucket]
     L --> M[MQTT discovery + HA sensors]
     M --> N[Home Assistant dashboard / automations]
-    D --> Q[Frigate snapshot → FaceID HACS]
-    Q -->|sub_label via MQTT| R[HA Publisher\nreassign_session_by_event]
+    G -->|end of clip| Q[Frigate event API\nsub_label]
+    Q --> R[reassign_session_by_event]
     R --> L
     G --> O[Processed / failed archive folders]
     D --> P[Coral USB accelerator\noptional]
@@ -84,22 +84,24 @@ Per frame (`pipeline.Pipeline.process`):
    the person nearest it; that person's keypoints are the active ones.
 4. **juggle state machine** (`juggle.JuggleCounter`) — see below.
 5. **persist + publish** — completed streaks go to SQLite attributed to
-   **Unknown Juggler**. The HA publisher pushes per-person sensors and waits for
-   FaceID to fire a re-attribution.
+   **Unknown Juggler**. After the clip finishes, the pipeline queries Frigate's
+   event API for the current `sub_label` and reassigns those attempts if a
+   person was identified.
 
-## Identity: FaceID async re-attribution
+## Identity: Frigate FaceID at end of processing
 
 In-process InsightFace face recognition (per-frame embedding + cosine-similarity
-voting) is **disabled**. Identity is now resolved asynchronously by the
+voting) is **disabled**. Identity is resolved by the
 [FaceID Community integration](https://github.com/SkyTechNerds/faceid)
-running in Home Assistant.
+running in Home Assistant, which writes a `sub_label` onto the Frigate event.
+The tracker does not listen for FaceID MQTT events.
 
 ```
-clip processed → bucketed to Unknown Juggler → scores published
-              ↓                                        ↓  (async, seconds later)
-       Frigate snapshot → FaceID resolves name → MQTT sub_label published
+clip processed → bucketed to Unknown Juggler
               ↓
-       juggle worker re-attributes Unknown attempts → scores republished
+       GET Frigate /api/events/{id} → current sub_label
+              ↓
+       reassign Unknown attempts → scores published under that person
 ```
 
 **Why this is better on this hardware:**
@@ -119,33 +121,13 @@ clip processed → bucketed to Unknown Juggler → scores published
 - `pipeline.py` calls `db.start_session(..., frigate_event_id=...)` passing the
   event ID extracted from the clip filename (`clip_{camera}_{event_id}.mp4`).
 - All completed streaks are written to `attempts` with `person_id = unknown_person_id`.
-- `ha_mqtt.HAPublisher` subscribes to `frigate/+/person/+` (when
-  `home_assistant.faceid_enabled: true`). On receipt it calls
-  `db.reassign_session_by_event(event_id, person_name)` which moves all Unknown
-  attempts for that session to the named person and recomputes high scores.
-- `sync_all()` republishes the updated scores to HA immediately.
-
-**Sub-label event routing (three cases):**
-
-When `_on_faceid_event` receives a `sub_label` for `event_id` it tries
-`reassign_session_by_event(event_id, person_name)` first. That call can return
-a result (already processed) or `None` (nothing to move yet). The handler then
-branches into one of three outcomes:
-
-1. **Apply now** — `reassign_session_by_event` succeeds (session + Unknown
-   attempts already committed). Scores are republished to HA immediately.
-2. **Park as pending** — `reassign_session_by_event` returns `None` *and*
-   `pipeline.is_event_queued(event_id)` is `True` (the clip is currently
-   in-flight or sitting in the inbox). The `(event_id, person_name)` pair is
-   stored in `HAPublisher._pending_faceid`.  
-   At the end of `pipeline.process()`, after `db.finish_session()` commits all
-   attempts, `ha.consume_pending_faceid(event_id)` pops the stored name and
-   calls `reassign_session_by_event` — so scores are published under the correct
-   person from the start with no Unknown Juggler intermediate state visible in HA.
-3. **Drop** — `reassign_session_by_event` returns `None` *and* no clip for this
-   event is queued or in-flight. The event_id is unknown, the clip was never
-   received, or the session has no Unknown attempts remaining. The attribution is
-   discarded so it never accumulates in `_pending_faceid`.
+- After `finish_session()`, `_apply_faceid_attribution` calls
+  `HAPublisher.lookup_frigate_sub_label(event_id)` (`GET /api/events/{id}`).
+- If Frigate has a nonempty `sub_label`, `db.reassign_session_by_event` moves
+  the Unknown attempts to that person and high scores are published once.
+- If FaceID has not labelled the event yet, the session stays **Unknown Juggler**.
+  Correct the label in FaceID, then reprocess the archived clip so the worker
+  sees the updated Frigate event.
 
 ## Juggle state machine
 
@@ -188,14 +170,11 @@ person. A retained `last_session` topic carries the latest clip summary, and a
   low ball-conf threshold).
 - Foot-vs-thigh contacts share few COCO keypoints (ankle/knee/hip only) — thigh
   contacts are approximated.
-- FaceID re-attribution depends on Frigate's best-frame snapshot quality. If the
-  kid never shows their face toward the camera during the event, FaceID won't fire
-  and the session stays as Unknown Juggler. Use the HA reassign control to correct
-  these manually.
-- FaceID re-attribution is asynchronous and typically fires within seconds of
-  Frigate recording a snapshot. The worker routes each sub_label event into one
-  of three cases: (1) apply immediately if the session is already in the DB,
-  (2) park as pending if the clip is still in-flight or queued and apply at the
-  end of processing, or (3) drop if no matching clip is queued and no Unknown
-  attempts exist (so stale events never accumulate).
+- FaceID attribution depends on Frigate's best-frame snapshot quality. If the
+  kid never shows their face toward the camera during the event, FaceID won't
+  write a `sub_label` and the session stays as Unknown Juggler. After correcting
+  the label in FaceID, reprocess the archived clip so the tracker reads the
+  updated Frigate event.
+- Attribution is applied once, at the end of processing, from Frigate's event
+  API. There is no live MQTT re-attribution after scores are published.
 - Two balls / two kids simultaneously is out of scope for v0.1 (one-at-a-time).

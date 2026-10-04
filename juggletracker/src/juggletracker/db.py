@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     frames           INTEGER NOT NULL DEFAULT 0,
     fps              REAL NOT NULL DEFAULT 0,
     duration_s       REAL NOT NULL DEFAULT 0,
-    frigate_event_id TEXT             -- Frigate event ID for async FaceID re-attribution
+    frigate_event_id TEXT             -- Frigate event ID used to look up FaceID sub_label
 );
 CREATE TABLE IF NOT EXISTS attempts (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -58,7 +58,7 @@ class Database:
         self.conn.executescript(_SCHEMA)
         # Migrate older DBs that predate the duration_s column.
         self._ensure_column("sessions", "duration_s", "REAL NOT NULL DEFAULT 0")
-        # Migrate older DBs that predate FaceID async re-attribution.
+        # Migrate older DBs that predate Frigate event attribution.
         self._ensure_column("sessions", "frigate_event_id", "TEXT")
         # High-score replay clip: path to the most-recent high-score video for
         # this person, and when it was captured (epoch). Overwritten in place
@@ -156,10 +156,7 @@ class Database:
         return int(cur.lastrowid)
 
     def lookup_session_by_event_id(self, frigate_event_id: str) -> Optional[int]:
-        """Return the session_id for a Frigate event, or None if not found.
-
-        Used by the FaceID MQTT handler to locate which session to re-attribute
-        after Frigate's async face recognition fires a sub_label update."""
+        """Return the session_id for a Frigate event, or None if not found."""
         row = self.conn.execute(
             "SELECT id FROM sessions WHERE frigate_event_id = ? "
             "ORDER BY started_at DESC LIMIT 1",
@@ -172,12 +169,12 @@ class Database:
     ) -> Optional[dict]:
         """Re-attribute all Unknown Juggler attempts in a session to a named person.
 
-        Called when FaceID publishes a sub_label for a Frigate event that was
-        already processed and bucketed to Unknown Juggler. Looks up the session
-        by event ID, finds the target person by name (creating them if needed),
-        moves every Unknown attempt in that session to the target, and
-        recomputes high scores for both. Returns a summary dict or None if the
-        session/person could not be found or there was nothing to move::
+        Called at the end of clip processing with Frigate's current sub_label.
+        Looks up the session by event ID, finds the target person by name
+        (creating them if needed), moves every Unknown attempt in that session
+        to the target, and recomputes high scores for both. Returns a summary
+        dict or None if the session could not be found or there was nothing to
+        move::
 
             {
               "session_id":    int,
