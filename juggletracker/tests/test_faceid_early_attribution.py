@@ -69,6 +69,23 @@ def test_reassign_fires_new_high_flag(tmp_path):
     assert db.high_scores()["Kid2"] == 22
 
 
+def test_reassign_existing_person_uses_person_id_not_last_insert_id(tmp_path):
+    db = _db(tmp_path)
+    event_id = "evt_existing_person"
+    kid_id = db.add_person("Kid4")
+    sid = _start_session(db, frigate_event_id=event_id)
+    uid = db.unknown_person_id
+    for count in range(1, 4):
+        db.record_attempt(sid, uid, track_id=1, count=count, ended_reason="end")
+
+    result = db.reassign_session_by_event(event_id, "Kid4")
+
+    assert result is not None
+    assert result["person_name"] == "Kid4"
+    assert db.high_scores()["Kid4"] == 3
+    assert db.person_name(kid_id) == "Kid4"
+
+
 def test_reassign_no_new_high_when_below_existing(tmp_path):
     db = _db(tmp_path)
     event_id = "evt_nonewhigh"

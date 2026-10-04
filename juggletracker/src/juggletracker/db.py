@@ -83,7 +83,7 @@ class Database:
             (name, time.time()),
         )
         self.conn.commit()
-        if cur.lastrowid:
+        if cur.rowcount == 1 and cur.lastrowid:
             return cur.lastrowid
         row = self.conn.execute(
             "SELECT id FROM people WHERE name = ?", (name,)
