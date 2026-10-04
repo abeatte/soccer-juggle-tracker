@@ -23,7 +23,7 @@ sections:
             {% set result = namespace(entities=[]) %}
             {% for s in states.sensor | selectattr('entity_id', 'search',
             '^sensor\..+_juggle_high_score$') %}
-              {% set clean_name = s.name | regex_replace(find='(?i)\\s*Juggle High Score$', replace='') %}
+              {% set clean_name = s.name | regex_replace(find='(?i)^Soccer Juggle Tracker\\s*', replace='') | regex_replace(find='(?i)\\s*Juggle High Score$', replace='') %}
               {% set result.entities = result.entities + [{'entity': s.entity_id, 'name': clean_name}] %}
             {% endfor %}
             {{ result.entities }}
@@ -335,12 +335,12 @@ sections:
                     [[[
                       const u = entity.attributes.video_url;
                       const n = entity.attributes.friendly_name
+                        .replace(/Soccer Juggle Tracker/i, '')
                         .replace(/ Juggle High Score$/i, '');
                       if (!u) return '';
                       return `<div style='padding:8px;text-align:left'>
                         <div style='font-size:1.1em;font-weight:bold;margin-bottom:4px'>
                           ${n} &mdash; ${entity.state} juggles
-                          <a href='${u}' target='_blank' style='font-size:0.8em;margin-left:8px'>&#9654; open</a>
                         </div>
                         <video controls preload='metadata' style='width:100%;border-radius:4px' src='${u}'></video>
                       </div>`;
