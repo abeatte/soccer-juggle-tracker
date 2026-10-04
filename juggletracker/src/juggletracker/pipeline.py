@@ -290,6 +290,7 @@ class Pipeline:
                         self.ha.publish_queues()
                 if counter is None:
                     counter = self._new_counter(h)
+                    ball_tracker.frame_size = (img.shape[1], img.shape[0])
 
                 det = self.detector.detect_track(img)
                 ball_det = det.ball.xy if det.ball else None
@@ -545,8 +546,12 @@ class Pipeline:
 
     # ------------------------------------------------------------------
     def _new_ball_tracker(self) -> BallTracker:
+        j = self.cfg.juggle
         return BallTracker(
-            max_bridge_frames=int(self.cfg.juggle.get("max_bridge_frames", 8))
+            max_bridge_frames=int(j.get("max_bridge_frames", 8)),
+            max_speed_px=float(j.get("max_bridge_speed_px", 60)),
+            stuck_frames=int(j.get("stuck_ball_frames", 20)),
+            stuck_px=float(j.get("stuck_ball_px", 8)),
         )
 
     def _new_counter(self, frame_height: int) -> JuggleCounter:
@@ -592,6 +597,7 @@ class Pipeline:
                     self.thermal.maybe_wait()
                 if counter is None:
                     counter = self._new_counter(h)
+                    ball_tracker.frame_size = (img.shape[1], img.shape[0])
                 det = self.detector.detect_track(img)
                 ball_det = det.ball.xy if det.ball else None
                 if ball_det is None and self.ball_fallback.enabled:
