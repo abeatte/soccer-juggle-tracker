@@ -50,6 +50,8 @@ def _set_threads(n: int) -> None:
     try:
         import torch
 
+        # NNPACK needs AVX2; without it every conv logs an init warning.
+        torch.backends.nnpack.set_flags(False)
         if n and n > 0:
             torch.set_num_threads(n)
         else:
