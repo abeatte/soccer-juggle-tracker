@@ -295,11 +295,11 @@ Open Home Assistant and verify:
 - `sensor.juggle_last_session`
 - per-person high-score sensors
 - the Juggle Inbox Queue sensor
-- the Delete Selected Inbox Clip control
+- the Inbox Queue cards with clip thumbnails, durations, and per-clip delete buttons
 - Frigate camera/person entities
 
-The delete control operates over MQTT through the soccer worker; Home Assistant
-does not need the inbox mounted.
+Each card's delete button operates over MQTT through the soccer worker; Home
+Assistant does not need the inbox mounted.
 
 ## 8. Rollback
 

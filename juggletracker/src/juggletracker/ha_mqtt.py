@@ -13,7 +13,9 @@ Topics (with defaults discovery_prefix=homeassistant, node_id=juggle_tracker):
 """
 from __future__ import annotations
 
+import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -150,20 +152,16 @@ class HAPublisher:
         self._reprocess_option_to_filename: dict[str, str] = {}
         self._reprocess_filename_to_option: dict[str, str] = {}
         self._reprocess_attributions: dict[str, list[str]] = {}
-        # Delete-a-clip-from-the-inbox control. Deleting the clip that is
-        # currently being processed also cancels the in-flight run.
-        self.inbox_select_topic = f"{self.node}/inbox_select/set"
-        self.delete_topic = f"{self.node}/delete/set"
-        self._inbox_selected: Optional[str] = None
-        self._last_inbox_options: Optional[list] = None
+        # Per-clip delete commands and cached queue media metadata.
+        self.delete_file_topic = f"{self.node}/delete_file/set"
+        self._inbox_metadata_cache: dict[str, dict] = {}
         # Back-reference to the Pipeline (set via bind_worker); used to cancel
         # the in-flight clip when the operator deletes the file being processed.
         self._worker = None
         self.client.subscribe(self.reprocess_topic)
         self.client.subscribe(self.reprocess_select_topic)
         self.client.subscribe(self.annotate_processed_topic)
-        self.client.subscribe(self.inbox_select_topic)
-        self.client.subscribe(self.delete_topic)
+        self.client.subscribe(self.delete_file_topic)
         self.announce_queues()
         self.publish_queues()
         self._retire_reassign_entities()
@@ -268,14 +266,8 @@ class HAPublisher:
                 self.client.publish(
                     f"{self.node}/annotate_processed",
                     "ON" if self.annotate_processed else "OFF", retain=True)
-            elif topic == self.inbox_select_topic:
-                self._inbox_selected = (
-                    None if (not payload or payload == SELECT_NONE) else payload
-                )
-                self.client.publish(f"{self.node}/inbox_select",
-                                    payload or SELECT_NONE, retain=True)
-            elif topic == self.delete_topic:
-                self._do_delete_inbox()
+            elif topic == self.delete_file_topic:
+                self._do_delete_inbox(payload)
             elif not self.calib_enabled:
                 return
             elif topic == self.apply_topic:
@@ -519,7 +511,7 @@ class HAPublisher:
 
     def announce_queues(self) -> None:
         """Discovery for the inbox-queue + processed-count sensors and the
-        reprocess select + button."""
+        per-clip delete cards, and reprocess select + button."""
         if not self.enabled:
             return
         dev = self._device()
@@ -551,6 +543,18 @@ class HAPublisher:
                 "availability_topic": self.avail_topic,
                 "device": dev,
             }), retain=True)
+        # Retire the former single-selection inbox controls and preview sensor.
+        for component, object_id in (
+            ("select", "inbox_file"),
+            ("button", "delete_inbox"),
+            ("sensor", "inbox_preview"),
+        ):
+            self.client.publish(
+                f"{self.prefix}/{component}/{self.node}/{object_id}/config",
+                "", retain=True,
+            )
+        for topic in ("inbox_select", "inbox_preview"):
+            self.client.publish(f"{self.node}/{topic}", "", retain=True)
         self.client.publish(
             f"{self.prefix}/button/{self.node}/reprocess/config",
             json.dumps({
@@ -596,24 +600,6 @@ class HAPublisher:
         self.client.publish(f"{self.node}/last_reprocessed", "", retain=True)
         # Start the reprocess dropdown with a clean (nothing-selected) state.
         self.client.publish(f"{self.node}/reprocess_select", SELECT_NONE,
-                            retain=True)
-        # Delete-selected-inbox-clip button (destructive — the HA card should
-        # attach a tap confirmation). If the selected clip is the one currently
-        # being processed, this also cancels the in-flight run.
-        self.client.publish(
-            f"{self.prefix}/button/{self.node}/delete_inbox/config",
-            json.dumps({
-                "name": "Delete Selected Inbox Clip",
-                "unique_id": f"{self.node}_delete_inbox",
-                "command_topic": self.delete_topic,
-                "payload_press": "delete",
-                "icon": "mdi:trash-can",
-                "entity_category": "config",
-                "availability_topic": self.avail_topic,
-                "device": dev,
-            }), retain=True)
-        # Start the inbox dropdown with a clean (nothing-selected) state.
-        self.client.publish(f"{self.node}/inbox_select", SELECT_NONE,
                             retain=True)
         # Retire the previous thumbnail grab-time control.
         self.client.publish(
@@ -681,22 +667,6 @@ class HAPublisher:
                 "device": self._device(),
             }), retain=True)
 
-    def _announce_inbox_select(self, options: list) -> None:
-        """(Re)publish the inbox-delete `select` discovery with current options."""
-        self.client.publish(
-            f"{self.prefix}/select/{self.node}/inbox_file/config",
-            json.dumps({
-                "name": "Juggle Inbox File",
-                "unique_id": f"{self.node}_inbox_file",
-                "state_topic": f"{self.node}/inbox_select",
-                "command_topic": self.inbox_select_topic,
-                "options": options,
-                "icon": "mdi:file-remove",
-                "entity_category": "config",
-                "availability_topic": self.avail_topic,
-                "device": self._device(),
-            }), retain=True)
-
     def invalidate_queue_cache(self) -> None:
         """Force the next publish_queues() call to re-fetch attributions and
         re-announce the reprocess select, even if the file list hasn't changed.
@@ -705,17 +675,34 @@ class HAPublisher:
         self._last_select_options = None
 
     def publish_queues(self) -> None:
-        """Publish inbox + processed listings and refresh the reprocess select.
+        """Publish queue listings, inbox clip metadata, and the reprocess select.
 
-        Called by the watcher each cycle. State is a count; the filenames ride
-        as a `files` attribute (capped to keep the MQTT payload small)."""
+        Called by the watcher each cycle. Inbox filenames ride as a `files`
+        attribute; `clips` carries duration and thumbnail metadata for the
+        dashboard's per-video cards."""
         if not self.enabled:
             return
+        if not hasattr(self, "_inbox_metadata_cache"):
+            self._inbox_metadata_cache = {}
         infiles = self._list_videos(self.cfg.capture.get("inbox_dir"))
         pfiles = self._list_videos(self.cfg.capture.get("processed_dir"))
+        inbox_clips = [
+            clip for name in infiles
+            if (clip := self._inbox_clip_metadata(name)) is not None
+        ]
+        stale_names = set(self._inbox_metadata_cache) - set(infiles)
+        for name in stale_names:
+            stale = self._inbox_metadata_cache.pop(name)
+            thumbnail_path = stale.get("thumbnail_path")
+            if thumbnail_path:
+                try:
+                    os.remove(thumbnail_path)
+                except FileNotFoundError:
+                    pass
         self.client.publish(
             f"{self.node}/inbox",
-            json.dumps({"count": len(infiles), "files": infiles[:100]}),
+            json.dumps({"count": len(infiles), "files": infiles[:100],
+                        "clips": inbox_clips}),
             retain=True)
         self.client.publish(
             f"{self.node}/processed",
@@ -745,11 +732,6 @@ class HAPublisher:
                     selected_option = SELECT_NONE
                 self.client.publish(f"{self.node}/reprocess_select",
                                     selected_option, retain=True)
-        # Keep the inbox-delete dropdown in sync with the live inbox contents.
-        in_opts = [SELECT_NONE] + infiles[:50]
-        if in_opts != self._last_inbox_options:
-            self._announce_inbox_select(in_opts)
-            self._last_inbox_options = in_opts
 
     def _do_reprocess(self) -> None:
         """Copy the selected processed clip into the inbox so the watcher re-runs
@@ -804,18 +786,20 @@ class HAPublisher:
         except Exception as exc:
             print(f"  [reprocess] failed to requeue '{name}': {exc}", flush=True)
 
-    def _do_delete_inbox(self) -> None:
-        """Delete the selected inbox clip.
+    def _do_delete_inbox(self, filename: str) -> None:
+        """Delete one inbox clip or cancel it if the worker is processing it.
 
         If it is the clip currently being processed, ask the worker to cancel
         the in-flight run — the watcher then removes the file once the loop
         aborts. Otherwise the queued clip is removed here immediately."""
-        sel = self._inbox_selected
-        if not sel or sel == SELECT_NONE:
-            print("  [delete] no inbox clip selected", flush=True)
+        name = os.path.basename(filename)
+        if not filename or name != filename or name == SELECT_NONE:
+            print("  [delete] invalid clip name", flush=True)
             return
-        name = os.path.basename(sel)  # guard against path traversal
         inbox = self.cfg.capture.get("inbox_dir")
+        if not inbox:
+            print("  [delete] inbox directory is not configured", flush=True)
+            return
 
         cancelled = False
         if self._worker is not None:
@@ -845,9 +829,6 @@ class HAPublisher:
                   f": {name}", flush=True)
 
         self.publish_queues()  # reflect the removal immediately
-        self._inbox_selected = None
-        self.client.publish(f"{self.node}/inbox_select", SELECT_NONE,
-                            retain=True)
 
     # ------------------------------------------------------------------
     def _retire_reassign_entities(self) -> None:
@@ -878,6 +859,106 @@ class HAPublisher:
             return None
         codecs = result.stdout.strip().splitlines()
         return codecs[0].strip().lower() if codecs else None
+
+    @staticmethod
+    def _probe_duration(path: str) -> Optional[float]:
+        try:
+            result = subprocess.run(
+                ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                 "-of", "default=noprint_wrappers=1:nokey=1", path],
+                check=True, capture_output=True, text=True, timeout=10,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            print(f"  [preview] duration probe failed: {exc}", flush=True)
+            return None
+        try:
+            duration = float(result.stdout.strip())
+        except ValueError:
+            return None
+        return duration if math.isfinite(duration) and duration >= 0 else None
+
+    @staticmethod
+    def _format_duration(duration: Optional[float]) -> str:
+        if duration is None:
+            return "Duration unavailable"
+        total = max(0, int(duration))
+        hours, remainder = divmod(total, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        if hours:
+            return f"{hours}:{minutes:02}:{seconds:02}"
+        return f"{minutes}:{seconds:02}"
+
+    def _inbox_clip_metadata(self, filename: str) -> Optional[dict]:
+        name = os.path.basename(filename)
+        inbox = self.cfg.capture.get("inbox_dir")
+        src = os.path.join(inbox or "", name)
+        try:
+            stat = os.stat(src)
+        except OSError:
+            return None
+        signature = (stat.st_mtime_ns, stat.st_size)
+        cached = self._inbox_metadata_cache.get(name)
+        if cached and cached["signature"] == signature:
+            thumbnail_path = cached["thumbnail_path"]
+            if thumbnail_path is None or os.path.isfile(thumbnail_path):
+                return cached["metadata"]
+
+        duration = self._probe_duration(src)
+        thumbnail_path, thumbnail_url = self._create_inbox_thumbnail(
+            src, name, signature, duration
+        )
+        metadata = {
+            "name": name,
+            "duration_s": duration or 0,
+            "duration": self._format_duration(duration),
+            "thumbnail_url": thumbnail_url,
+        }
+        self._inbox_metadata_cache[name] = {
+            "signature": signature,
+            "metadata": metadata,
+            "thumbnail_path": thumbnail_path,
+        }
+        return metadata
+
+    def _create_inbox_thumbnail(
+        self, src: str, name: str, signature: tuple[int, int],
+        duration: Optional[float],
+    ) -> tuple[Optional[str], str]:
+        thumbnail_dir = os.path.join(
+            self.cfg.capture.get("highscore_dir", "highscores"),
+            "inbox_thumbnails",
+        )
+        clip_key = hashlib.sha256(name.encode("utf-8")).hexdigest()[:24]
+        thumbnail = os.path.join(thumbnail_dir, f"{clip_key}.jpg")
+        temporary = os.path.join(
+            thumbnail_dir, f".{clip_key}.{time.time_ns()}.jpg"
+        )
+        seek = (max(0.0, min(duration * 0.15, duration - 0.1))
+                if duration is not None and duration > 0 else 0.0)
+        try:
+            os.makedirs(thumbnail_dir, exist_ok=True)
+            subprocess.run(
+                ["ffmpeg", "-y", "-loglevel", "error", "-ss", f"{seek:.3f}",
+                 "-i", src, "-frames:v", "1", "-vf", "scale=640:-2",
+                 "-q:v", "3", temporary],
+                check=True, capture_output=True, timeout=20,
+            )
+            if not os.path.isfile(temporary) or os.path.getsize(temporary) == 0:
+                raise RuntimeError("ffmpeg produced an empty thumbnail")
+            os.replace(temporary, thumbnail)
+        except Exception as exc:
+            print(f"  [preview] thumbnail failed for {name}: {exc}", flush=True)
+            return None, ""
+        finally:
+            try:
+                os.remove(temporary)
+            except FileNotFoundError:
+                pass
+
+        version = f"{signature[0]}-{signature[1]}"
+        url = (f"{self.media_base.rstrip('/')}/inbox_thumbnails/"
+               f"{clip_key}.jpg?v={version}")
+        return thumbnail, url
 
     def _update_reprocess_preview(self) -> None:
         """Publish a browser-playable preview of the selected archived clip."""

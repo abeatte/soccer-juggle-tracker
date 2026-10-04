@@ -278,7 +278,7 @@ Open Home Assistant and verify:
 - `sensor.juggle_last_session`
 - Per-person high-score sensors
 - Juggle Inbox Queue sensor
-- Delete Selected Inbox Clip control
+- Inbox Queue cards with clip thumbnails, durations, and per-clip delete buttons
 - Frigate camera/person entities
 
 ---

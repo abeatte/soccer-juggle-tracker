@@ -118,11 +118,9 @@ def test_queue_refresh_uses_a_thread_owned_sqlite_connection(tmp_path):
     )
     publisher._worker = SimpleNamespace(db=db)
     publisher._last_select_options = None
-    publisher._last_inbox_options = None
     publisher._reprocess_selected = None
     publisher._update_reprocess_preview = lambda: None
     publisher._announce_reprocess_select = lambda _options: None
-    publisher._announce_inbox_select = lambda _options: None
 
     errors = []
 
