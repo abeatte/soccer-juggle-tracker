@@ -76,6 +76,9 @@ def _watch(args) -> int:
                     # Surface the just-finished clip in HA (live queue progress).
                     pipe.ha.publish_last_processed(
                         dst, res.streaks, annotated=res.annotated)
+                    # Bust the reprocess dropdown cache so attribution changes
+                    # (e.g. Unknown → named person) are reflected immediately.
+                    pipe.ha.invalidate_queue_cache()
                     # Remove a legacy marker left by a pre-upgrade queued clip.
                     try:
                         os.remove(marker)

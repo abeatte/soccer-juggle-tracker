@@ -806,6 +806,13 @@ class HAPublisher:
                 "device": self._device(),
             }), retain=True)
 
+    def invalidate_queue_cache(self) -> None:
+        """Force the next publish_queues() call to re-fetch attributions and
+        re-announce the reprocess select, even if the file list hasn't changed.
+        Call this after a clip finishes processing so attribution changes
+        (Unknown → named person) are immediately reflected in the dropdown."""
+        self._last_select_options = None
+
     def publish_queues(self) -> None:
         """Publish inbox + processed listings and refresh the reprocess select.
 
