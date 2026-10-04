@@ -206,6 +206,27 @@ class Pipeline:
             return True
         return False
 
+    def _rollback_failed_session(self, session_id: int, src, writer) -> None:
+        for resource in (src, writer):
+            if resource is not None:
+                try:
+                    resource.release()
+                except Exception as exc:
+                    print(f"  [cleanup] resource release failed: {exc}",
+                          flush=True)
+        try:
+            self.db.abort_session(session_id)
+            self.ha.sync_all(self.db.list_people())
+        except Exception as exc:
+            print(f"  [cleanup] session rollback failed: {exc}", flush=True)
+        try:
+            self.ha.publish_status("idle", progress=0)
+        except Exception as exc:
+            print(f"  [cleanup] failed to publish idle status: {exc}",
+                  flush=True)
+        self._cur_clip = None
+        self._cancel_clip = None
+
     def process(self, clip_path: str, debug_video: Optional[str] = None,
                 trace_sink=None) -> ClipResult:
         src = FrameSource(
@@ -240,86 +261,83 @@ class Pipeline:
         self.ha.publish_status("processing", progress=0.0, current=clip_path,
                                frame=0, total=total)
 
-        for frame in src:
-            # Operator asked (via HA) to cancel THIS clip: tear down cleanly,
-            # roll back everything the partial run wrote, then bail so the
-            # watcher deletes the file instead of archiving it.
-            if self._cancel_clip is not None:
-                src.release()
-                if writer is not None:
-                    writer.release()
-                self.db.abort_session(session_id)
-                self.ha.sync_all(self.db.list_people())
-                self.ha.publish_status("idle", progress=0)
-                print(f"  [cancel] aborted {os.path.basename(clip_path)} "
-                      f"({n_frames} frames in)", flush=True)
-                self._cur_clip = None
-                self._cancel_clip = None
-                raise ClipCancelled(clip_path)
-            n_frames += 1
-            img = frame.image
-            h, w = img.shape[:2]
-            # Thermal safety: check every ~2s of video and block if overheating.
-            if frame.index % 50 == 0:
-                self._cur_frame = frame.index
-                self._cur_pct = (round(100.0 * frame.index / self._cur_total, 1)
-                                 if self._cur_total else None)
-                self.ha.publish_status("processing", progress=self._cur_pct,
-                                       current=self._cur_clip, frame=frame.index,
-                                       total=self._cur_total)
-                self.thermal.maybe_wait()
-                # Keep the inbox/processed queue sensors live during long runs
-                # (a clip can take many minutes on this box).
-                if frame.index % 250 == 0:
-                    self.ha.publish_queues()
-            if counter is None:
-                counter = self._new_counter(h)
+        try:
+            for frame in src:
+                # Operator asked (via HA) to cancel THIS clip: tear down cleanly,
+                # roll back everything the partial run wrote, then bail so the
+                # watcher deletes the file instead of archiving it.
+                if self._cancel_clip is not None:
+                    print(f"  [cancel] aborted {os.path.basename(clip_path)} "
+                          f"({n_frames} frames in)", flush=True)
+                    raise ClipCancelled(clip_path)
+                n_frames += 1
+                img = frame.image
+                h, w = img.shape[:2]
+                # Thermal safety: check every ~2s of video and block if overheating.
+                if frame.index % 50 == 0:
+                    self._cur_frame = frame.index
+                    self._cur_pct = (round(100.0 * frame.index / self._cur_total, 1)
+                                     if self._cur_total else None)
+                    self.ha.publish_status("processing", progress=self._cur_pct,
+                                           current=self._cur_clip, frame=frame.index,
+                                           total=self._cur_total)
+                    self.thermal.maybe_wait()
+                    # Keep the inbox/processed queue sensors live during long runs
+                    # (a clip can take many minutes on this box).
+                    if frame.index % 250 == 0:
+                        self.ha.publish_queues()
+                if counter is None:
+                    counter = self._new_counter(h)
 
-            det = self.detector.detect_track(img)
-            ball_det = det.ball.xy if det.ball else None
-            if ball_det is None and self.ball_fallback.enabled:
-                ball_det = self.ball_fallback.detect(img, ball_tracker.last_xy)
-            ball_xy, ball_bridged = ball_tracker.update(frame.index, ball_det)
+                det = self.detector.detect_track(img)
+                ball_det = det.ball.xy if det.ball else None
+                if ball_det is None and self.ball_fallback.enabled:
+                    ball_det = self.ball_fallback.detect(img, ball_tracker.last_xy)
+                ball_xy, ball_bridged = ball_tracker.update(frame.index, ball_det)
 
-            # Pose estimation on stride frames.
-            if frame.index % stride == 0 and det.persons:
-                poses = self.pose.estimate(img)
-                last_poses = _match_pose_to_track(poses, det.persons)
+                # Pose estimation on stride frames.
+                if frame.index % stride == 0 and det.persons:
+                    poses = self.pose.estimate(img)
+                    last_poses = _match_pose_to_track(poses, det.persons)
 
-            # Attribute the ball to the nearest person (one-kid scenario).
-            active = _nearest_person_to_ball(det.persons, ball_xy)
-            if active is not None:
-                active_track = active.track_id
-            kps = last_poses.get(active_track) if active_track is not None else None
+                # Attribute the ball to the nearest person (one-kid scenario).
+                active = _nearest_person_to_ball(det.persons, ball_xy)
+                if active is not None:
+                    active_track = active.track_id
+                kps = last_poses.get(active_track) if active_track is not None else None
 
-            # Dynamic ground = the tracked juggler's feet (bbox bottom) + margin;
-            # None when no one is detected -> counter uses the static fallback.
-            ground_y = (float(active.xyxy[3]) + self._ground_margin
-                        if active is not None else None)
+                # Dynamic ground = the tracked juggler's feet (bbox bottom) + margin;
+                # None when no one is detected -> counter uses the static fallback.
+                ground_y = (float(active.xyxy[3]) + self._ground_margin
+                            if active is not None else None)
 
-            # Optional per-frame observation tap: lets the eval harness dump the
-            # exact (ball, keypoints, ground_y) trace fed to the counter so it
-            # can be replayed through the state machine with zero ML cost.
-            if trace_sink is not None:
-                trace_sink(frame.index, ball_xy, kps, ground_y)
+                # Optional per-frame observation tap: lets the eval harness dump the
+                # exact (ball, keypoints, ground_y) trace fed to the counter so it
+                # can be replayed through the state machine with zero ML cost.
+                if trace_sink is not None:
+                    trace_sink(frame.index, ball_xy, kps, ground_y)
 
-            event = counter.update(frame.index, ball_xy, kps, ground_y=ground_y)
-            if event is not None and event.count > 0:
-                self._record(session_id, active_track, event, streaks, new_highs)
+                event = counter.update(frame.index, ball_xy, kps, ground_y=ground_y)
+                if event is not None and event.count > 0:
+                    self._record(session_id, active_track, event, streaks, new_highs)
 
-            if debug_video:
-                writer = self._draw(
-                    img, det, ball_xy, ball_bridged, kps, counter,
-                    active_track, writer, debug_video, ground_y=ground_y
-                )
+                if debug_video:
+                    writer = self._draw(
+                        img, det, ball_xy, ball_bridged, kps, counter,
+                        active_track, writer, debug_video, ground_y=ground_y
+                    )
 
-        # Flush trailing streak.
-        if counter is not None:
-            ev = counter.flush(n_frames)
-            if ev is not None and ev.count > 0:
-                self._record(session_id, active_track, ev, streaks, new_highs)
+            # Flush trailing streak.
+            if counter is not None:
+                ev = counter.flush(n_frames)
+                if ev is not None and ev.count > 0:
+                    self._record(session_id, active_track, ev, streaks, new_highs)
 
-        self.db.finish_session(session_id, n_frames, time.perf_counter() - t0)
+            self.db.finish_session(session_id, n_frames, time.perf_counter() - t0)
+        except BaseException:
+            self._rollback_failed_session(session_id, src, writer)
+            raise
+
         src.release()
         if writer is not None:
             writer.release()
