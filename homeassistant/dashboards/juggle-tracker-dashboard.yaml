@@ -22,8 +22,8 @@ sections:
           template: >
             {% set result = namespace(entities=[]) %}
             {% for s in states.sensor | selectattr('entity_id', 'search',
-            '^sensor\.soccer_juggle_tracker_.+_juggle_high_score$') %}
-              {% set clean_name = s.name | regex_replace(find='(?i)^Soccer Juggle Tracker\\s*', replace='') %}
+            '^sensor\..+_juggle_high_score$') %}
+              {% set clean_name = s.name | regex_replace(find='(?i)\\s*Juggle High Score$', replace='') %}
               {% set result.entities = result.entities + [{'entity': s.entity_id, 'name': clean_name}] %}
             {% endfor %}
             {{ result.entities }}
@@ -39,7 +39,7 @@ sections:
           template: >
             {% set result = namespace(cards=[]) %}
             {% for b in states.button | selectattr('entity_id', 'search',
-            '^button\.soccer_juggle_tracker_reset_.+_high_score$') %}
+            '^button\.reset_.+_high_score$') %}
               {% set player_raw = b.entity_id | regex_findall_index('reset_(.+)_high_score') %}
               {% set player_name = 'Unknown' if player_raw == 'unknown_juggler' else player_raw | replace('_', ' ') | title %}
               {% set button_card = {
@@ -148,7 +148,7 @@ sections:
                         {{ result.cards if result.cards else [{'type': 'markdown', 'content': 'No videos are waiting in the inbox.'}] }}
               - type: divider
               - type: custom:entity-progress-card
-                entity: sensor.soccer_juggle_tracker_juggle_processing_progress
+                entity: sensor.juggle_processing_progress
                 layout: horizontal
                 size: medium
                 name: Processing Progress
@@ -171,7 +171,7 @@ sections:
                 max_value: 0.1
                 min_value: 0
                 bar_size: small
-              - entity: sensor.soccer_juggle_tracker_juggle_worker_state
+              - entity: sensor.juggle_worker_state
                 name: Worker State
               - type: divider
               - entity: switch.juggle_annotate_processed_clips
@@ -210,9 +210,9 @@ sections:
               type: section
               label: Detection confidence
             entities:
-              - entity: number.soccer_juggle_tracker_juggle_ball_confidence
+              - entity: number.juggle_ball_confidence
                 name: Ball Confidence
-              - entity: number.soccer_juggle_tracker_juggle_person_confidence
+              - entity: number.juggle_person_confidence
                 name: Person Confidence
 
           - type: custom:fold-entity-row
@@ -220,20 +220,20 @@ sections:
               type: section
               label: Juggle counting
             entities:
-              - entity: number.soccer_juggle_tracker_juggle_contact_radius_px
+              - entity: number.juggle_contact_radius_px
                 name: Contact Radius (px)
-              - entity: number.soccer_juggle_tracker_juggle_min_arc_height_px
+              - entity: number.juggle_min_arc_height_px
                 name: Min Arc Height (px)
                 icon: mdi:chart-bell-curve
-              - entity: number.soccer_juggle_tracker_juggle_smoothing_window
+              - entity: number.juggle_smoothing_window
                 name: Smoothing Window
-              - entity: number.soccer_juggle_tracker_juggle_lost_ball_frames
+              - entity: number.juggle_lost_ball_frames
                 name: Lost-Ball Frames
-              - entity: number.soccer_juggle_tracker_juggle_ball_bridge_frames
+              - entity: number.juggle_ball_bridge_frames
                 name: Ball Bridge Frames
-              - entity: number.soccer_juggle_tracker_juggle_ground_margin_px
+              - entity: number.juggle_ground_margin_px
                 name: Ground Margin (px)
-              - entity: number.soccer_juggle_tracker_juggle_min_contact_gap_frames
+              - entity: number.juggle_min_contact_gap_frames
                 name: Min Contact Gap (frames)
                 icon: mdi:timer-sand
 
@@ -242,19 +242,19 @@ sections:
               type: section
               label: Ball CV fallback (only active when the switch is ON)
             entities:
-              - entity: switch.soccer_juggle_tracker_juggle_ball_cv_fallback
+              - entity: switch.juggle_ball_cv_fallback
                 name: Ball CV Fallback
-              - entity: number.soccer_juggle_tracker_juggle_ball_cv_sensitivity
+              - entity: number.juggle_ball_cv_sensitivity
                 name: Ball CV Sensitivity
-              - entity: number.soccer_juggle_tracker_juggle_ball_cv_min_radius
+              - entity: number.juggle_ball_cv_min_radius
                 name: Ball CV Min Radius
-              - entity: number.soccer_juggle_tracker_juggle_ball_cv_max_radius
+              - entity: number.juggle_ball_cv_max_radius
                 name: Ball CV Max Radius
-              - entity: number.soccer_juggle_tracker_juggle_ball_cv_search_radius
+              - entity: number.juggle_ball_cv_search_radius
                 name: Ball CV Search Radius
-              - entity: number.soccer_juggle_tracker_juggle_ball_cv_edge_threshold
+              - entity: number.juggle_ball_cv_edge_threshold
                 name: Ball CV Edge Threshold
-              - entity: number.soccer_juggle_tracker_juggle_ball_cv_accumulator_dp
+              - entity: number.juggle_ball_cv_accumulator_dp
                 name: Ball CV Accumulator (dp)
 
           - type: custom:fold-entity-row
@@ -262,15 +262,15 @@ sections:
               type: section
               label: Performance & thermal
             entities:
-              - entity: number.soccer_juggle_tracker_juggle_inference_resolution
+              - entity: number.juggle_inference_resolution
                 name: Inference Resolution
-              - entity: number.soccer_juggle_tracker_juggle_person_pose_stride
+              - entity: number.juggle_person_pose_stride
                 name: Person/Pose Stride
-              - entity: number.soccer_juggle_tracker_juggle_torch_threads
+              - entity: number.juggle_torch_threads
                 name: Torch Threads
-              - entity: number.soccer_juggle_tracker_juggle_thermal_max_temp_c
+              - entity: number.juggle_thermal_max_temp_c
                 name: Thermal Max Temp (C)
-              - entity: number.soccer_juggle_tracker_juggle_thermal_resume_temp_c
+              - entity: number.juggle_thermal_resume_temp_c
                 name: Thermal Resume Temp (C)
 
         visibility:
@@ -283,7 +283,7 @@ sections:
           - show_name: true
             show_icon: true
             type: button
-            entity: button.soccer_juggle_tracker_apply_calibration_restart
+            entity: button.apply_calibration_restart
             name: Apply & Restart
             icon: mdi:restart
             show_state: false
@@ -291,12 +291,12 @@ sections:
               action: perform-action
               perform_action: button.press
               target:
-                entity_id: button.soccer_juggle_tracker_apply_calibration_restart
+                entity_id: button.apply_calibration_restart
             icon_height: 48px
           - show_name: true
             show_icon: true
             type: button
-            entity: button.soccer_juggle_tracker_revert_calibration_to_defaults
+            entity: button.revert_calibration_to_defaults
             name: Revert Defaults
             icon: mdi:backup-restore
             show_state: false
@@ -304,7 +304,7 @@ sections:
               action: perform-action
               perform_action: button.press
               target:
-                entity_id: button.soccer_juggle_tracker_revert_calibration_to_defaults
+                entity_id: button.revert_calibration_to_defaults
               confirmation:
                 text: Discard calibration tweaks and restart with config.yaml defaults?
             icon_height: 48px
@@ -323,7 +323,7 @@ sections:
           title: 🎬 Best Runs
         filter:
           include:
-            - entity_id: sensor.soccer_juggle_tracker_*_juggle_high_score
+            - entity_id: sensor.*_juggle_high_score
               state: "> 0"
               options:
                 type: custom:button-card
@@ -335,7 +335,6 @@ sections:
                     [[[
                       const u = entity.attributes.video_url;
                       const n = entity.attributes.friendly_name
-                        .replace(/Soccer Juggle Tracker /i, '')
                         .replace(/ Juggle High Score$/i, '');
                       if (!u) return '';
                       return `<div style='padding:8px;text-align:left'>

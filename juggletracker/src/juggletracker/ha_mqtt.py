@@ -41,6 +41,9 @@ except Exception:  # pragma: no cover - optional at import time
 # keep showing the now-missing filename as selected.
 SELECT_NONE = "(none)"
 
+# Optional prefix for every entity_id (home_assistant.entity_prefix); empty = none.
+DEFAULT_ENTITY_PREFIX = ""
+
 
 def _slug(name: str) -> str:
     return re.sub(r"[^a-z0-9_]+", "_", name.strip().lower()).strip("_")
@@ -82,6 +85,8 @@ class HAPublisher:
         self.enabled = bool(cfg.home_assistant.get("enabled", False))
         self.prefix = cfg.home_assistant.get("discovery_prefix", "homeassistant")
         self.node = cfg.home_assistant.get("node_id", "juggle_tracker")
+        self.entity_prefix = _slug(
+            cfg.home_assistant.get("entity_prefix", DEFAULT_ENTITY_PREFIX))
         # Base URL (as reached from a browser on the LAN) under which HA serves
         # the high-score replay clips. With the recommended `www/juggle` mount
         # this is http://<ha-host>:8123/local/juggle .
@@ -175,6 +180,14 @@ class HAPublisher:
             "manufacturer": "DIY",
         }
 
+    def _eid(self, component: str, key: str) -> dict:
+        """Single source of truth for HA entity_ids: <component>.<prefix>_<key>.
+
+        HA only honors this when an entity is first registered; existing
+        registry entries keep their current ids."""
+        stem = f"{self.entity_prefix}_{key}" if self.entity_prefix else key
+        return {"default_entity_id": f"{component}.{stem}"}
+
     def bind_worker(self, worker) -> None:
         """Attach the Pipeline so inbound commands can reach into a running clip
         (used by the inbox-delete handler to cancel the in-flight file)."""
@@ -190,6 +203,7 @@ class HAPublisher:
         payload = {
             "name": f"{name} Juggle High Score",
             "unique_id": f"{self.node}_{slug}_high",
+            **self._eid("sensor", f"{slug}_juggle_high_score"),
             "state_topic": f"{self.node}/{slug}/high",
             # Carries the replay `video_url` (+ updated ts) as sensor attributes
             # so a Lovelace card / Markdown link can point at the latest clip.
@@ -234,6 +248,7 @@ class HAPublisher:
         payload = {
             "name": f"Reset {name} High Score",
             "unique_id": f"{self.node}_{slug}_reset",
+            **self._eid("button", f"reset_{slug}_high_score"),
             "command_topic": self.cmd_topic,
             "payload_press": slug,          # tells the worker which person to reset
             "icon": "mdi:trophy-broken",
@@ -367,6 +382,7 @@ class HAPublisher:
                 json.dumps({
                     "name": f"Juggle {spec['name']}",
                     "unique_id": f"{self.node}_cfg_{slug}",
+                    **self._eid("number", _slug(f"Juggle {spec['name']}")),
                     "state_topic": f"{self.node}/config/{slug}",
                     "command_topic": f"{self.node}/config/{slug}/set",
                     "min": spec["min"], "max": spec["max"], "step": spec["step"],
@@ -387,6 +403,7 @@ class HAPublisher:
             json.dumps({
                 "name": "Juggle Ball CV Fallback",
                 "unique_id": f"{self.node}_cfg_{fb_slug}",
+                **self._eid("switch", "juggle_ball_cv_fallback"),
                 "state_topic": f"{self.node}/config/{fb_slug}",
                 "command_topic": f"{self.node}/config/{fb_slug}/set",
                 "payload_on": "ON", "payload_off": "OFF",
@@ -405,6 +422,7 @@ class HAPublisher:
             json.dumps({
                 "name": "Apply Calibration & Restart",
                 "unique_id": f"{self.node}_apply_restart",
+                **self._eid("button", "apply_calibration_restart"),
                 "command_topic": self.apply_topic,
                 "payload_press": "apply",
                 "icon": "mdi:restart",
@@ -418,6 +436,7 @@ class HAPublisher:
             json.dumps({
                 "name": "Revert Calibration to Defaults",
                 "unique_id": f"{self.node}_revert_defaults",
+                **self._eid("button", "revert_calibration_to_defaults"),
                 "command_topic": self.revert_topic,
                 "payload_press": "revert",
                 "icon": "mdi:backup-restore",
@@ -520,7 +539,7 @@ class HAPublisher:
             json.dumps({
                 "name": "Juggle Inbox Queue",
                 "unique_id": f"{self.node}_inbox_queue",
-                "default_entity_id": "sensor.juggle_inbox_queue",
+                **self._eid("sensor", "juggle_inbox_queue"),
                 "state_topic": f"{self.node}/inbox",
                 "value_template": "{{ value_json.count }}",
                 "json_attributes_topic": f"{self.node}/inbox",
@@ -534,7 +553,7 @@ class HAPublisher:
             json.dumps({
                 "name": "Juggle Processed Count",
                 "unique_id": f"{self.node}_processed_count",
-                "default_entity_id": "sensor.juggle_processed_count",
+                **self._eid("sensor", "juggle_processed_count"),
                 "state_topic": f"{self.node}/processed",
                 "value_template": "{{ value_json.count }}",
                 "json_attributes_topic": f"{self.node}/processed",
@@ -560,7 +579,7 @@ class HAPublisher:
             json.dumps({
                 "name": "Reprocess Selected Clip",
                 "unique_id": f"{self.node}_reprocess",
-                "default_entity_id": "button.reprocess_selected_clip",
+                **self._eid("button", "reprocess_selected_clip"),
                 "command_topic": self.reprocess_topic,
                 "payload_press": "reprocess",
                 "icon": "mdi:reload",
@@ -578,7 +597,7 @@ class HAPublisher:
             json.dumps({
                 "name": "Annotate Processed Clips",
                 "unique_id": f"{self.node}_annotate_processed",
-                "default_entity_id": "switch.juggle_annotate_processed_clips",
+                **self._eid("switch", "juggle_annotate_processed_clips"),
                 "state_topic": f"{self.node}/annotate_processed",
                 "command_topic": self.annotate_processed_topic,
                 "payload_on": "ON", "payload_off": "OFF",
@@ -610,7 +629,7 @@ class HAPublisher:
             json.dumps({
                 "name": "Juggle Reprocess Preview",
                 "unique_id": f"{self.node}_reprocess_thumb",
-                "default_entity_id": "sensor.juggle_reprocess_preview",
+                **self._eid("sensor", "juggle_reprocess_preview"),
                 "state_topic": f"{self.node}/reprocess_thumb",
                 "value_template": "{{ value_json.name | default('none') }}",
                 "json_attributes_topic": f"{self.node}/reprocess_thumb",
@@ -631,6 +650,7 @@ class HAPublisher:
             json.dumps({
                 "name": "Juggle Last Processed",
                 "unique_id": f"{self.node}_last_processed",
+                **self._eid("sensor", "juggle_last_processed"),
                 "state_topic": f"{self.node}/last_processed",
                 "value_template": "{{ value_json.name | default('none') }}",
                 "json_attributes_topic": f"{self.node}/last_processed",
@@ -643,6 +663,7 @@ class HAPublisher:
             json.dumps({
                 "name": "Juggle Last Processed Person",
                 "unique_id": f"{self.node}_last_processed_person",
+                **self._eid("sensor", "juggle_last_processed_person"),
                 "state_topic": f"{self.node}/last_processed",
                 "value_template": "{{ value_json.attributed_to | default('Unknown Juggler') }}",
                 "icon": "mdi:account-check",
@@ -657,7 +678,7 @@ class HAPublisher:
             json.dumps({
                 "name": "Juggle Reprocess File",
                 "unique_id": f"{self.node}_reprocess_file",
-                "default_entity_id": "select.juggle_reprocess_file",
+                **self._eid("select", "juggle_reprocess_file"),
                 "state_topic": f"{self.node}/reprocess_select",
                 "command_topic": self.reprocess_select_topic,
                 "options": options,
@@ -1123,6 +1144,7 @@ class HAPublisher:
             json.dumps({
                 "name": "Juggle Worker State",
                 "unique_id": f"{self.node}_worker_state",
+                **self._eid("sensor", "juggle_worker_state"),
                 "state_topic": self.status_topic,
                 "value_template": "{{ value_json.state }}",
                 "json_attributes_topic": self.status_topic,
@@ -1135,6 +1157,7 @@ class HAPublisher:
             json.dumps({
                 "name": "Juggle Processing Progress",
                 "unique_id": f"{self.node}_progress",
+                **self._eid("sensor", "juggle_processing_progress"),
                 "state_topic": self.status_topic,
                 "value_template": "{{ value_json.progress | default(0) }}",
                 "unit_of_measurement": "%",
@@ -1178,6 +1201,7 @@ class HAPublisher:
             json.dumps({
                 "name": "Juggle Last Process Time",
                 "unique_id": f"{self.node}_last_process_time",
+                **self._eid("sensor", "juggle_last_process_time"),
                 "state_topic": self.timing_topic,
                 "value_template": "{{ value_json.last_seconds | default(0) }}",
                 "json_attributes_topic": self.timing_topic,
@@ -1189,6 +1213,7 @@ class HAPublisher:
             json.dumps({
                 "name": "Juggle Average Process Time",
                 "unique_id": f"{self.node}_avg_process_time",
+                **self._eid("sensor", "juggle_average_process_time"),
                 "state_topic": self.timing_topic,
                 "value_template": "{{ value_json.avg_seconds | default(0) }}",
                 "icon": "mdi:timer-sand",
