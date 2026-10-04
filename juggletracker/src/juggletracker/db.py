@@ -44,7 +44,10 @@ CREATE TABLE IF NOT EXISTS attempts (
     track_id    INTEGER,
     count       INTEGER NOT NULL,
     ended_reason TEXT,                  -- 'hand' | 'ground' | 'lost' | 'end'
-    created_at  REAL NOT NULL
+    created_at  REAL NOT NULL,
+    left_count  INTEGER NOT NULL DEFAULT 0,
+    right_count INTEGER NOT NULL DEFAULT 0,
+    header_count INTEGER NOT NULL DEFAULT 0
 );
 """
 
@@ -60,6 +63,8 @@ class Database:
         self._ensure_column("sessions", "duration_s", "REAL NOT NULL DEFAULT 0")
         # Migrate older DBs that predate Frigate event attribution.
         self._ensure_column("sessions", "frigate_event_id", "TEXT")
+        for col in ("left_count", "right_count", "header_count"):
+            self._ensure_column("attempts", col, "INTEGER NOT NULL DEFAULT 0")
         # High-score replay clip: path to the most-recent high-score video for
         # this person, and when it was captured (epoch). Overwritten in place
         # whenever the record is beaten, so only the latest is ever kept.
@@ -331,12 +336,17 @@ class Database:
         track_id: Optional[int],
         count: int,
         ended_reason: str,
+        left_count: int = 0,
+        right_count: int = 0,
+        header_count: int = 0,
     ) -> bool:
         """Record a completed juggle streak. Returns True if it's a new high score."""
         self.conn.execute(
             "INSERT INTO attempts(session_id, person_id, track_id, count, "
-            "ended_reason, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (session_id, person_id, track_id, count, ended_reason, time.time()),
+            "ended_reason, created_at, left_count, right_count, header_count) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (session_id, person_id, track_id, count, ended_reason, time.time(),
+             left_count, right_count, header_count),
         )
         new_high = False
         if person_id is not None:

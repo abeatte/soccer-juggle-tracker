@@ -67,6 +67,9 @@ class StreakEvent:
     ended_reason: str      # 'hand' | 'ground' | 'lost' | 'end'
     start_frame: int
     end_frame: int
+    left_count: int = 0
+    right_count: int = 0
+    header_count: int = 0
 
 
 @dataclass
@@ -95,6 +98,9 @@ class JuggleCounter:
     _missing: int = 0
     _streak: int = 0
     _streak_start: int = 0
+    _left: int = 0
+    _right: int = 0
+    _header: int = 0
     _last_contact_y: Optional[float] = None
     _since_contact_min: Optional[float] = None
     _last_contact_frame: int = -1000000
@@ -243,6 +249,12 @@ class JuggleCounter:
             if self._streak == 0:
                 self._streak_start = frame_index
             self._streak += 1
+            if name in _HEAD_KEYPOINTS:
+                self._header += 1
+            elif name.startswith("left_") and _is_footish(name):
+                self._left += 1
+            elif name.startswith("right_") and _is_footish(name):
+                self._right += 1
         return None
 
     def _end_streak(self, reason: str, frame_index: int) -> StreakEvent:
@@ -251,9 +263,13 @@ class JuggleCounter:
             ended_reason=reason,
             start_frame=self._streak_start,
             end_frame=frame_index,
+            left_count=self._left,
+            right_count=self._right,
+            header_count=self._header,
         )
         self._completed.append(ev)
         self._streak = 0
+        self._left = self._right = self._header = 0
         self._last_contact_y = None
         self._since_contact_min = None
         return ev
@@ -267,6 +283,9 @@ class JuggleCounter:
     @property
     def current_streak(self) -> int:
         return self._streak
+
+
+_HEAD_KEYPOINTS = {"nose", "left_eye", "right_eye", "left_ear", "right_ear"}
 
 
 def _is_footish(name: str) -> bool:

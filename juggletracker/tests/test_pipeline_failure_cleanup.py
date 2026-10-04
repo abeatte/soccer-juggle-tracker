@@ -41,6 +41,9 @@ class FakeCounter:
                 ended_reason="end",
                 start_frame=0,
                 end_frame=0,
+                left_count=0,
+                right_count=0,
+                header_count=0,
             )
         return None
 

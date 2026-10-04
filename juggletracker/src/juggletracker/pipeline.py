@@ -453,7 +453,8 @@ class Pipeline:
         # after the clip finishes.
         pid = self.db.unknown_person_id
         is_high = self.db.record_attempt(
-            session_id, pid, track_id, event.count, event.ended_reason
+            session_id, pid, track_id, event.count, event.ended_reason,
+            event.left_count, event.right_count, event.header_count,
         )
         name = self.db.person_name(pid)
         streaks.append(
@@ -461,6 +462,9 @@ class Pipeline:
                 "person": name,
                 "count": event.count,
                 "reason": event.ended_reason,
+                "left_count": event.left_count,
+                "right_count": event.right_count,
+                "header_count": event.header_count,
                 "start_frame": event.start_frame,
                 "end_frame": event.end_frame,
             }
