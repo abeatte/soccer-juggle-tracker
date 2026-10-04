@@ -79,8 +79,6 @@ sections:
             entities:
               - entity: sensor.juggle_inbox_queue
                 name: Inbox queue
-              - entity: sensor.juggle_processed_count
-                name: Processed count
               - type: divider
               - type: custom:entity-progress-card
                 entity: sensor.soccer_juggle_tracker_juggle_processing_progress
