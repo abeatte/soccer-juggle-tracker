@@ -140,7 +140,7 @@ class HAPublisher:
         self.annotate_processed_topic = f"{self.node}/annotate_processed/set"
         self.annotate_processed = bool(self.cfg.capture.get(
             "annotate_processed_default",
-            self.cfg.capture.get("reprocess_annotate_default", False),
+            self.cfg.capture.get("reprocess_annotate_default", True),
         ))
         self._reprocess_selected: Optional[str] = None
         self._last_select_options: Optional[list] = None
