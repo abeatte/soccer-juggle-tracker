@@ -517,8 +517,18 @@ class Pipeline:
             for _, (x, y, c) in kps.items():
                 if c >= 0.2:
                     cv2.circle(vis, (int(x), int(y)), 3, (255, 0, 255), -1)
-        cv2.putText(vis, f"streak: {counter.current_streak}", (10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 2)
+        overlay_lines = [
+            (f"streak: {counter.current_streak}", 1.0),
+            (f"Left foot: {counter.current_left_count}", 0.55),
+            (f"Right foot: {counter.current_right_count}", 0.55),
+            (f"Head: {counter.current_header_count}", 0.55),
+        ]
+        for index, (label, scale) in enumerate(overlay_lines):
+            position = (10, 30 + index * 22)
+            cv2.putText(vis, label, position, cv2.FONT_HERSHEY_SIMPLEX,
+                        scale, (255, 255, 255), 4)
+            cv2.putText(vis, label, position, cv2.FONT_HERSHEY_SIMPLEX,
+                        scale, (128, 0, 0), 2)
         if writer is None:
             h, w = vis.shape[:2]
             # Encode H.264 directly via an ffmpeg pipe — no mp4v intermediate

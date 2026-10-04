@@ -284,6 +284,18 @@ class JuggleCounter:
     def current_streak(self) -> int:
         return self._streak
 
+    @property
+    def current_left_count(self) -> int:
+        return self._left
+
+    @property
+    def current_right_count(self) -> int:
+        return self._right
+
+    @property
+    def current_header_count(self) -> int:
+        return self._header
+
 
 _HEAD_KEYPOINTS = {"nose", "left_eye", "right_eye", "left_ear", "right_ear"}
 
