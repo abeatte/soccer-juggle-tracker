@@ -773,7 +773,19 @@ class HAPublisher:
         try:
             os.makedirs(inbox, exist_ok=True)
             dst = os.path.join(inbox, name)
-            shutil.copy2(src, dst)
+            if os.path.exists(dst):
+                print(f"  [reprocess] '{name}' is already queued or processing",
+                      flush=True)
+                return
+            temporary = dst + ".tmp"
+            try:
+                shutil.copy2(src, temporary)
+                os.replace(temporary, dst)
+            finally:
+                try:
+                    os.remove(temporary)
+                except FileNotFoundError:
+                    pass
             note = ""
             if self.annotate_processed:
                 note = " (annotated replay enabled)"

@@ -65,6 +65,36 @@ def test_reprocess_copies_clip_to_inbox(tmp_path):
     assert (inbox / clip_name).read_bytes() == b"clip"
 
 
+def test_reprocess_does_not_overwrite_queued_clip(tmp_path):
+    processed = tmp_path / "processed"
+    inbox = tmp_path / "inbox"
+    processed.mkdir()
+    inbox.mkdir()
+    clip_name = "clip_front_yard_event-2.mp4"
+    (processed / clip_name).write_bytes(b"archived clip")
+    queued_clip = inbox / clip_name
+    queued_clip.write_bytes(b"clip currently being processed")
+
+    publisher = HAPublisher.__new__(HAPublisher)
+    publisher.enabled = True
+    publisher.client = FakeClient()
+    publisher.node = "juggle_tracker"
+    publisher.cfg = SimpleNamespace(
+        capture={"processed_dir": str(processed), "inbox_dir": str(inbox)},
+        database=SimpleNamespace(path=str(tmp_path / "juggle.db")),
+    )
+    publisher._reprocess_selected = clip_name
+    publisher.annotate_processed = False
+    publisher._worker = None
+    publisher.publish_queues = lambda: None
+    publisher.publish_last_processed_pending = lambda *_args, **_kwargs: None
+    publisher._update_reprocess_preview = lambda: None
+
+    publisher._do_reprocess()
+
+    assert queued_clip.read_bytes() == b"clip currently being processed"
+
+
 def test_queue_refresh_uses_a_thread_owned_sqlite_connection(tmp_path):
     db_path = str(tmp_path / "juggle.db")
     db = Database(db_path)
