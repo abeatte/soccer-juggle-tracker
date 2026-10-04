@@ -25,22 +25,24 @@ def _process(args) -> int:
 
     cfg = load_config(args.config)
     pipe = Pipeline(cfg)
-    t0 = time.time()
-    res = pipe.process(args.clip, debug_video=args.debug_video)
-    dt = time.time() - t0
-    print(f"\nProcessed {os.path.basename(args.clip)}: {res.frames} frames in "
-          f"{dt:.1f}s ({res.frames / dt:.1f} fps analysis)")
-    if res.streaks:
-        print("Streaks:")
-        for s in res.streaks:
-            print(f"  {s['person']:<12} {s['count']:>3} juggles  (ended: {s['reason']})")
-    else:
-        print("No juggle streaks detected.")
-    for nh in res.new_high_scores:
-        print(f"  *** NEW HIGH SCORE: {nh['person']} = {nh['score']} ***")
-    if args.move:
-        move_to_processed(cfg, args.clip)
-    pipe.close()
+    try:
+        t0 = time.time()
+        res = pipe.process(args.clip, debug_video=args.debug_video)
+        dt = time.time() - t0
+        print(f"\nProcessed {os.path.basename(args.clip)}: {res.frames} frames in "
+              f"{dt:.1f}s ({res.frames / dt:.1f} fps analysis)")
+        if res.streaks:
+            print("Streaks:")
+            for s in res.streaks:
+                print(f"  {s['person']:<12} {s['count']:>3} juggles  (ended: {s['reason']})")
+        else:
+            print("No juggle streaks detected.")
+        for nh in res.new_high_scores:
+            print(f"  *** NEW HIGH SCORE: {nh['person']} = {nh['score']} ***")
+        if args.move:
+            move_to_processed(cfg, args.clip)
+    finally:
+        pipe.close()
     return 0
 
 

@@ -112,6 +112,18 @@ class Database:
         )
         self.conn.commit()
 
+    def _recompute_high_score(self, person_id: int) -> int:
+        row = self.conn.execute(
+            "SELECT MAX(count) AS hi FROM attempts WHERE person_id = ?",
+            (person_id,),
+        ).fetchone()
+        high = int(row["hi"]) if row and row["hi"] is not None else 0
+        self.conn.execute(
+            "UPDATE people SET high_score = ? WHERE id = ?",
+            (high, person_id),
+        )
+        return high
+
     def session_has_attributed_attempt(self, session_id: int) -> bool:
         """Return whether this session has an attempt assigned to a known person."""
         row = self.conn.execute(
@@ -134,13 +146,7 @@ class Database:
             "UPDATE attempts SET person_id = ? WHERE person_id IS NULL", (uid,)
         )
         reassigned = cur.rowcount or 0
-        row = self.conn.execute(
-            "SELECT MAX(count) AS m FROM attempts WHERE person_id = ?", (uid,)
-        ).fetchone()
-        high = int(row["m"]) if row and row["m"] is not None else 0
-        self.conn.execute(
-            "UPDATE people SET high_score = ? WHERE id = ?", (high, uid)
-        )
+        high = self._recompute_high_score(uid)
         self.conn.commit()
         return reassigned, high
 
@@ -212,19 +218,8 @@ class Database:
         )
 
         # Recompute high scores for both Unknown and the target person.
-        def _recompute(person_id: int) -> int:
-            row = self.conn.execute(
-                "SELECT MAX(count) AS hi FROM attempts WHERE person_id = ?",
-                (person_id,),
-            ).fetchone()
-            hi = int(row["hi"]) if row and row["hi"] is not None else 0
-            self.conn.execute(
-                "UPDATE people SET high_score = ? WHERE id = ?", (hi, person_id)
-            )
-            return hi
-
-        _recompute(uid)
-        new_person_high = _recompute(pid)
+        self._recompute_high_score(uid)
+        new_person_high = self._recompute_high_score(pid)
         self.conn.commit()
 
         return {
@@ -296,12 +291,12 @@ class Database:
     def abort_session(self, session_id: int) -> None:
         """Discard a session and everything it recorded.
 
-        Used when a clip's processing is cancelled mid-run: streaks that already
-        completed were committed by :meth:`record_attempt` (and may have bumped
-        a person's denormalized ``high_score``), so simply stopping would leave
-        phantom scores from an unwanted clip. This deletes the session (its
-        attempts cascade away via the FK) and then recomputes the high score of
-        every person the session touched from their *remaining* attempts."""
+        Used when clip processing is cancelled or fails mid-run: streaks that
+        already completed were committed by :meth:`record_attempt` (and may
+        have bumped a person's denormalized ``high_score``), so simply stopping
+        would leave phantom scores from an unwanted clip. This deletes the
+        session (its attempts cascade away via the FK) and recomputes the high
+        score of every person the session touched from their remaining attempts."""
         rows = self.conn.execute(
             "SELECT DISTINCT person_id FROM attempts "
             "WHERE session_id = ? AND person_id IS NOT NULL",
@@ -311,14 +306,7 @@ class Database:
         # ON DELETE CASCADE (PRAGMA foreign_keys=ON) removes the attempts too.
         self.conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
         for pid in pids:
-            row = self.conn.execute(
-                "SELECT MAX(count) AS hi FROM attempts WHERE person_id = ?",
-                (pid,),
-            ).fetchone()
-            hi = int(row["hi"]) if row and row["hi"] is not None else 0
-            self.conn.execute(
-                "UPDATE people SET high_score = ? WHERE id = ?", (hi, pid)
-            )
+            self._recompute_high_score(pid)
         self.conn.commit()
 
     def process_time_stats(self) -> tuple[float, float, int]:
