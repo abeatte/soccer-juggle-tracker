@@ -25,7 +25,7 @@ capture:
   highscore_dir: "/srv/juggle_highscores"
   save_highscore_video: true
   annotate_highscore: true
-  processed_retention_days: 14 # 0 = keep forever (default)
+  processed_retention_days: 21 # 0 = keep forever (default)
   annotate_processed_default: true # annotate all incoming and reprocessed clips
 
 # Region of interest in the frame, as fractions [0-1]: x0,y0,x1,y1.
@@ -40,7 +40,7 @@ processing:
   infer_long_edge: 960 # was 640 - faster + cooler (small accuracy cost)
   # Run person-detect + pose every Nth frame (interpolate tracks between).
   # The BALL is always detected every frame — it's the fast-moving object.
-  person_stride: 3 # was 4
+  person_stride: 2 # was 4
   # Cap CPU threads. Measured baseline: HA+Matter use only ~3% CPU total, so the
   # 8-thread i7-3740QM is nearly free during processing. 6 threads speeds up
   # clips while leaving 2 for the system; the practical limit here is HEAT, not

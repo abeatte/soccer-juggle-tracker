@@ -301,6 +301,7 @@ def _bench(args) -> int:
         person_conf=float(cfg.models.get("person_conf", 0.35)),
         ball_conf=float(cfg.models.get("ball_conf", 0.20)),
         torch_threads=int(cfg.processing.get("torch_threads", 0)),
+        imgsz=size,
     )
     pose = PoseEstimator(cfg.models.pose)
 

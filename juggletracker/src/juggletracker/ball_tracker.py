@@ -41,15 +41,20 @@ class BallTracker:
             return (float(ball_xy[0]), float(ball_xy[1])), False
 
         # Ball missing this frame — bridge if we can.
+        pred = self.predict(frame_index)
+        return pred, pred is not None
+
+    def predict(self, frame_index: int) -> Optional[Tuple[float, float]]:
+        """Constant-velocity position estimate, or None outside the bridge window."""
         if self.max_bridge <= 0 or self._last_frame is None or len(self._pts) < 2:
-            return None, False
+            return None
         gap = frame_index - self._last_frame
         if gap > self.max_bridge:
-            return None, False
+            return None
         f0, x0, y0 = self._pts[-1]
         f1, x1, y1 = self._pts[-2]
         span = max(1, f0 - f1)
         vx = (x0 - x1) / span
         vy = (y0 - y1) / span
         step = frame_index - f0
-        return (x0 + vx * step, y0 + vy * step), True
+        return (x0 + vx * step, y0 + vy * step)

@@ -2,9 +2,10 @@
 
 Definition being counted
 ------------------------
-A *juggle* is a ball contact with a body part that is **not** a hand/arm, with
-the ball airborne between contacts and **never** touching the ground or another
-object. A hand/arm contact or a ground touch ends (resets) the current streak.
+A *juggle* is a launch from a foot/knee/head that rises, arcs, and returns to a
+foot/knee/head. A launch is counted even if the ball does not return to a valid
+body part, but that ends the streak ('ground' when nothing is near the ball,
+'hand' for a hand/arm touch, 'lost' if the ball vanishes).
 
 How a contact is detected
 --------------------------
@@ -70,6 +71,7 @@ class StreakEvent:
     left_count: int = 0
     right_count: int = 0
     header_count: int = 0
+    ground_y: Optional[float] = None  # lowest ankle y seen; annotation only
 
 
 @dataclass
@@ -77,6 +79,7 @@ class JuggleCounter:
     frame_height: int
     smooth_window: int = 5
     min_arc_px: float = 18.0
+    min_fall_px: float = 6.0
     contact_radius_px: float = 90.0
     valid_keypoints: set[str] = field(default_factory=lambda: set(VALID_DEFAULT))
     illegal_keypoints: set[str] = field(default_factory=lambda: set(ILLEGAL_DEFAULT))
@@ -101,6 +104,9 @@ class JuggleCounter:
     _left: int = 0
     _right: int = 0
     _header: int = 0
+    _ground_y: Optional[float] = None
+    _cur_frame: int = 0
+    _unposed_frame: int = -1000000
     _last_contact_y: Optional[float] = None
     _since_contact_min: Optional[float] = None
     _last_contact_frame: int = -1000000
@@ -139,6 +145,7 @@ class JuggleCounter:
         ``ground_y`` is the per-frame floor line in image-y (the tracked
         juggler's feet + margin). When None (no juggler detected this frame) the
         ground touch check is skipped for that frame."""
+        self._cur_frame = frame_index
         # Remember the most recent real pose so a contact landing on a
         # pose-skipped frame can still be classified (within staleness).
         if keypoints is not None:
@@ -196,7 +203,12 @@ class JuggleCounter:
         # min_arc_px. Tracked incrementally in `_since_contact_min`.
         peak_y = (self._since_contact_min
                   if self._since_contact_min is not None else contact_y)
-        return (contact_y - peak_y) >= self.min_arc_px
+        # Ball must have risen from the launch contact and fallen back to this one.
+        # The return may be a knee/head higher than the launch foot, so the fall
+        # only needs to clear the (smaller) min_fall_px.
+        rose = self._last_contact_y - peak_y
+        fell = contact_y - peak_y
+        return rose >= self.min_arc_px and fell >= self.min_fall_px
 
     def _classify_contact(
         self,
@@ -230,6 +242,7 @@ class JuggleCounter:
             kps = self._last_kps
 
         if kps is None or self._last_ball_xy is None:
+            self._unposed_frame = frame_index  # surfaced via unposed_contact_age
             # No pose to classify with — ambiguous. Don't count, don't reset.
             # (The old code blindly did `self._streak += 1` here, inflating
             # counts on every pose-skipped contact frame.)
@@ -237,7 +250,10 @@ class JuggleCounter:
 
         name, dist = nearest_keypoint(kps, (self._last_ball_xy[0], contact_y))
         if name is None or dist > self.contact_radius_px:
-            # Ambiguous contact — don't count, don't reset.
+            # Ball came back down with no body part near it: the launched juggle
+            # stays counted but the streak ends. With no streak it's just noise.
+            if self._streak > 0:
+                return self._end_streak("ground", frame_index)
             return None
 
         if name in self.illegal_keypoints:
@@ -249,6 +265,11 @@ class JuggleCounter:
             if self._streak == 0:
                 self._streak_start = frame_index
             self._streak += 1
+            if name.endswith("_ankle"):
+                # Lowest ankle seen while juggling approximates the floor (annotation only).
+                ay = float(kps[name][1])
+                if self._ground_y is None or ay > self._ground_y:
+                    self._ground_y = ay
             if name in _HEAD_KEYPOINTS:
                 self._header += 1
             elif name.startswith("left_") and _is_footish(name):
@@ -266,8 +287,10 @@ class JuggleCounter:
             left_count=self._left,
             right_count=self._right,
             header_count=self._header,
+            ground_y=self._ground_y,
         )
         self._completed.append(ev)
+        self._ground_y = None
         self._streak = 0
         self._left = self._right = self._header = 0
         self._last_contact_y = None
@@ -279,6 +302,11 @@ class JuggleCounter:
         if self._streak > 0:
             return self._end_streak("end", frame_index)
         return None
+
+    @property
+    def unposed_contact_age(self) -> int:
+        """Frames since a contact was skipped for lack of recent pose data."""
+        return self._cur_frame - self._unposed_frame
 
     @property
     def current_streak(self) -> int:

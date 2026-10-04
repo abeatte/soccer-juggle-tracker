@@ -154,6 +154,8 @@ class Pipeline:
             person_conf=float(cfg.models.get("person_conf", 0.35)),
             ball_conf=float(cfg.models.get("ball_conf", 0.20)),
             torch_threads=int(cfg.processing.get("torch_threads", 0)),
+            imgsz=int(cfg.models.get("detector_imgsz", 0)
+                      or cfg.processing.get("infer_long_edge", 0)) or None,
         )
         self.pose = PoseEstimator(cfg.models.pose)
         # Classical fallback ball finder (used only when YOLO misses the ball).
@@ -292,7 +294,8 @@ class Pipeline:
                 det = self.detector.detect_track(img)
                 ball_det = det.ball.xy if det.ball else None
                 if ball_det is None and self.ball_fallback.enabled:
-                    ball_det = self.ball_fallback.detect(img, ball_tracker.last_xy)
+                    ball_det = self.ball_fallback.detect(
+                        img, ball_tracker.predict(frame.index) or ball_tracker.last_xy)
                 ball_xy, ball_bridged = ball_tracker.update(frame.index, ball_det)
 
                 # Pose estimation on stride frames.
@@ -503,9 +506,9 @@ class Pipeline:
             bx, by = int(ball_xy[0]), int(ball_xy[1])
             color = (0, 255, 255) if ball_bridged else (255, 0, 255)
             label = "bridge" if ball_bridged else "cv"
-            cv2.circle(vis, (bx, by), 8, color, 1)
+            cv2.circle(vis, (bx, by), 8, color, 3)
             cv2.putText(vis, label, (bx + 10, by),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
         # Fallback search window (where the classical detector looks next frame).
         if self.ball_fallback.enabled and ball_xy is not None:
             sr = int(self.ball_fallback.search_radius)
@@ -517,6 +520,9 @@ class Pipeline:
             for _, (x, y, c) in kps.items():
                 if c >= 0.2:
                     cv2.circle(vis, (int(x), int(y)), 3, (255, 0, 255), -1)
+        if counter.unposed_contact_age <= 12:
+            cv2.putText(vis, "NO POSE: contact skipped", (10, h_img - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 165, 255), 2)
         overlay_lines = [
             (f"streak: {counter.current_streak}", 1.0),
             (f"Left foot: {counter.current_left_count}", 0.55),
@@ -550,6 +556,7 @@ class Pipeline:
             frame_height=frame_height,
             smooth_window=int(j.get("smooth_window", 5)),
             min_arc_px=float(j.get("min_arc_px", 18)),
+            min_fall_px=float(j.get("min_fall_px", 6)),
             contact_radius_px=float(j.get("contact_radius_px", 90)),
             valid_keypoints=set(j.get("valid_keypoints", [])) or None,
             illegal_keypoints=set(j.get("illegal_keypoints", [])) or None,
@@ -588,7 +595,8 @@ class Pipeline:
                 det = self.detector.detect_track(img)
                 ball_det = det.ball.xy if det.ball else None
                 if ball_det is None and self.ball_fallback.enabled:
-                    ball_det = self.ball_fallback.detect(img, ball_tracker.last_xy)
+                    ball_det = self.ball_fallback.detect(
+                        img, ball_tracker.predict(frame.index) or ball_tracker.last_xy)
                 ball_xy, ball_bridged = ball_tracker.update(frame.index, ball_det)
                 if frame.index % stride == 0 and det.persons:
                     poses = self.pose.estimate(img)

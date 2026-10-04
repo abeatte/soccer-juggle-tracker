@@ -64,7 +64,7 @@ class Detector:
     """Person+ball detector with per-person ByteTrack tracking."""
 
     def __init__(self, weights: str, person_conf: float, ball_conf: float,
-                 torch_threads: int = 0):
+                 torch_threads: int = 0, imgsz: Optional[int] = None):
         from ultralytics import YOLO
 
         _set_threads(torch_threads)
@@ -73,6 +73,8 @@ class Detector:
         self.ball_conf = ball_conf
         # Lowest of the two thresholds so YOLO returns both classes; we filter after.
         self._infer_conf = min(person_conf, ball_conf)
+        # None -> Ultralytics default (640), which downscales larger frames.
+        self.imgsz = int(imgsz) if imgsz else None
 
     def detect_track(self, image: np.ndarray) -> FrameDetections:
         """Run detection+tracking on one frame (persist tracker state across calls)."""
@@ -83,6 +85,7 @@ class Detector:
             conf=self._infer_conf,
             tracker="bytetrack.yaml",
             verbose=False,
+            **({"imgsz": self.imgsz} if self.imgsz else {}),
         )
         out = FrameDetections()
         if not results:
@@ -127,6 +130,9 @@ class ClassicalBallDetector:
         self.dp = float(cfg.get("dp", 1.2))
         self.param1 = float(cfg.get("hough_param1", 100))
         self.param2 = float(cfg.get("hough_param2", 18))
+        # Reject circles farther than this from the expected position so a head or
+        # shoe doesn't masquerade as the ball (the bridge then takes over).
+        self.max_jump_px = float(cfg.get("max_jump_px", 70))
         self.hsv_lower = cfg.get("hsv_lower")
         self.hsv_upper = cfg.get("hsv_upper")
 
@@ -169,6 +175,8 @@ class ClassicalBallDetector:
         if last_xy is not None:
             lx, ly = last_xy[0] - ox, last_xy[1] - oy
             best = min(cands, key=lambda c: (c[0] - lx) ** 2 + (c[1] - ly) ** 2)
+            if ((best[0] - lx) ** 2 + (best[1] - ly) ** 2) ** 0.5 > self.max_jump_px:
+                return None
         else:
             best = cands[0]
         return (float(best[0] + ox), float(best[1] + oy))

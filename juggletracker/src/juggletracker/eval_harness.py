@@ -169,6 +169,7 @@ def counter_params_from_cfg(cfg) -> dict:
     return {
         "smooth_window": int(j.get("smooth_window", 5)),
         "min_arc_px": float(j.get("min_arc_px", 18)),
+        "min_fall_px": float(j.get("min_fall_px", 6)),
         "contact_radius_px": float(j.get("contact_radius_px", 90)),
         "lost_frames_reset": int(j.get("lost_frames_reset", 15)),
         "min_contact_gap_frames": int(j.get("min_contact_gap_frames", 6)),
