@@ -81,6 +81,14 @@ class JuggleCounter:
     min_arc_px: float = 18.0
     min_fall_px: float = 6.0
     contact_radius_px: float = 90.0
+    # A streak must START on a clearer contact than it continues on.
+    start_contact_radius_px: float = 100.0
+    # An arc longer than this (frames) isn't a controlled juggle: the streak ends.
+    max_contact_gap_frames: int = 50
+    # After a streak ends, the rebounding ball can't start a new one this soon.
+    restart_cooldown_frames: int = 30
+    # Wrist/elbow must be this many times closer than the nearest legal point.
+    hand_margin: float = 2.5
     valid_keypoints: set[str] = field(default_factory=lambda: set(VALID_DEFAULT))
     illegal_keypoints: set[str] = field(default_factory=lambda: set(ILLEGAL_DEFAULT))
     lost_frames_reset: int = 15   # ball missing this many frames -> streak lost
@@ -107,6 +115,7 @@ class JuggleCounter:
     _ground_y: Optional[float] = None
     _cur_frame: int = 0
     _unposed_frame: int = -1000000
+    _last_end_frame: int = -1000000
     _last_contact_y: Optional[float] = None
     _since_contact_min: Optional[float] = None
     _last_contact_frame: int = -1000000
@@ -187,9 +196,13 @@ class JuggleCounter:
             too_soon = (frame_index - self._last_contact_frame
                         < self.min_contact_gap_frames)
             if not too_soon and self._is_real_arc(contact_y):
+                gap = frame_index - self._last_contact_frame
                 self._last_contact_frame = frame_index
-                event = self._classify_contact(frame_index, contact_y,
-                                               keypoints, ground_y)
+                if self._streak > 0 and gap > self.max_contact_gap_frames:
+                    event = self._end_streak("ground", frame_index)
+                else:
+                    event = self._classify_contact(frame_index, contact_y,
+                                                   keypoints, ground_y)
                 self._last_contact_y = contact_y
                 self._since_contact_min = contact_y  # measure the next arc fresh
         return event
@@ -256,6 +269,19 @@ class JuggleCounter:
                 return self._end_streak("ground", frame_index)
             return None
 
+        if self._streak == 0 and dist > self.start_contact_radius_px:
+            return None
+        if (self._streak == 0 and
+                frame_index - self._last_end_frame < self.restart_cooldown_frames):
+            return None
+
+        if name in self.illegal_keypoints:
+            # Arms hanging at hip height sit near thigh contacts, so a hand ball
+            # needs the wrist/elbow to be clearly closer than any legal point.
+            alt, alt_d = self._nearest_legal(kps, (self._last_ball_xy[0], contact_y))
+            if alt is not None and alt_d <= self.hand_margin * dist:
+                name, dist = alt, alt_d
+
         if name in self.illegal_keypoints:
             if self._streak > 0:
                 return self._end_streak("hand", frame_index)
@@ -278,6 +304,16 @@ class JuggleCounter:
                 self._right += 1
         return None
 
+    def _nearest_legal(self, kps: Keypoints, point: tuple[float, float]):
+        best, best_d = None, float("inf")
+        for n, (x, y, c) in kps.items():
+            if c < 0.2 or not (n in self.valid_keypoints or _is_footish(n)):
+                continue
+            d = ((x - point[0]) ** 2 + (y - point[1]) ** 2) ** 0.5
+            if d < best_d:
+                best, best_d = n, d
+        return best, best_d
+
     def _end_streak(self, reason: str, frame_index: int) -> StreakEvent:
         ev = StreakEvent(
             count=self._streak,
@@ -290,6 +326,7 @@ class JuggleCounter:
             ground_y=self._ground_y,
         )
         self._completed.append(ev)
+        self._last_end_frame = frame_index
         self._ground_y = None
         self._streak = 0
         self._left = self._right = self._header = 0

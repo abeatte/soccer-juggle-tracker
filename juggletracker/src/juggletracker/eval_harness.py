@@ -62,13 +62,19 @@ def make_trace_sink(fh):
     """Return a ``trace_sink`` callable that writes one JSONL frame per call.
 
     Pass it to :meth:`Pipeline.process(clip, trace_sink=...)`."""
-    def _sink(frame_index: int, ball_xy, kps, ground_y) -> None:
-        fh.write(json.dumps({
+    def _sink(frame_index: int, ball_xy, kps, ground_y, ball_info=None) -> None:
+        rec = {
             "f": int(frame_index),
             "ball": _ball_to_json(ball_xy),
             "kps": _kps_to_json(kps),
             "ground": None if ground_y is None else float(ground_y),
-        }) + "\n")
+        }
+        if ball_info is not None:
+            # Raw per-source ball hits: lets the tracker be re-tuned offline.
+            rec["yolo"] = _ball_to_json(ball_info.get("yolo"))
+            rec["cv"] = _ball_to_json(ball_info.get("cv"))
+            rec["bridged"] = bool(ball_info.get("bridged"))
+        fh.write(json.dumps(rec) + "\n")
     return _sink
 
 
@@ -171,6 +177,10 @@ def counter_params_from_cfg(cfg) -> dict:
         "min_arc_px": float(j.get("min_arc_px", 18)),
         "min_fall_px": float(j.get("min_fall_px", 6)),
         "contact_radius_px": float(j.get("contact_radius_px", 90)),
+        "start_contact_radius_px": float(j.get("start_contact_radius_px", 100)),
+        "max_contact_gap_frames": int(j.get("max_contact_gap_frames", 50)),
+        "restart_cooldown_frames": int(j.get("restart_cooldown_frames", 30)),
+        "hand_margin": float(j.get("hand_margin", 2.5)),
         "lost_frames_reset": int(j.get("lost_frames_reset", 15)),
         "min_contact_gap_frames": int(j.get("min_contact_gap_frames", 6)),
         "kp_staleness_frames": int(j.get("kp_staleness_frames", 6)),

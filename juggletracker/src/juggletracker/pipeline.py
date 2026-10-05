@@ -294,10 +294,12 @@ class Pipeline:
 
                 det = self.detector.detect_track(img)
                 ball_det = det.ball.xy if det.ball else None
+                ball_src = "yolo"
                 if ball_det is None and self.ball_fallback.enabled:
+                    ball_src = "cv"
                     ball_det = self.ball_fallback.detect(
                         img, ball_tracker.predict(frame.index) or ball_tracker.last_xy)
-                ball_xy, ball_bridged = ball_tracker.update(frame.index, ball_det)
+                ball_xy, ball_bridged = ball_tracker.update(frame.index, ball_det, ball_src)
 
                 # Pose estimation on stride frames.
                 if frame.index % stride == 0 and det.persons:
@@ -319,7 +321,11 @@ class Pipeline:
                 # exact (ball, keypoints, ground_y) trace fed to the counter so it
                 # can be replayed through the state machine with zero ML cost.
                 if trace_sink is not None:
-                    trace_sink(frame.index, ball_xy, kps, ground_y)
+                    trace_sink(frame.index, ball_xy, kps, ground_y, ball_info={
+                        "yolo": det.ball.xy if det.ball else None,
+                        "cv": ball_det if ball_src == "cv" else None,
+                        "bridged": ball_bridged,
+                    })
 
                 event = counter.update(frame.index, ball_xy, kps, ground_y=ground_y)
                 if event is not None and event.count > 0:
@@ -552,6 +558,8 @@ class Pipeline:
             max_speed_px=float(j.get("max_bridge_speed_px", 60)),
             stuck_frames=int(j.get("stuck_ball_frames", 20)),
             stuck_px=float(j.get("stuck_ball_px", 8)),
+            cv_max_frames=int(j.get("cv_max_frames", 25)),
+            cv_max_dist_px=float(j.get("cv_max_dist_px", 200)),
         )
 
     def _new_counter(self, frame_height: int) -> JuggleCounter:
@@ -563,6 +571,10 @@ class Pipeline:
             min_arc_px=float(j.get("min_arc_px", 18)),
             min_fall_px=float(j.get("min_fall_px", 6)),
             contact_radius_px=float(j.get("contact_radius_px", 90)),
+            start_contact_radius_px=float(j.get("start_contact_radius_px", 100)),
+            max_contact_gap_frames=int(j.get("max_contact_gap_frames", 50)),
+            restart_cooldown_frames=int(j.get("restart_cooldown_frames", 30)),
+            hand_margin=float(j.get("hand_margin", 2.5)),
             valid_keypoints=set(j.get("valid_keypoints", [])) or None,
             illegal_keypoints=set(j.get("illegal_keypoints", [])) or None,
             lost_frames_reset=int(j.get("lost_frames_reset", 15)),
@@ -600,10 +612,12 @@ class Pipeline:
                     ball_tracker.frame_size = (img.shape[1], img.shape[0])
                 det = self.detector.detect_track(img)
                 ball_det = det.ball.xy if det.ball else None
+                ball_src = "yolo"
                 if ball_det is None and self.ball_fallback.enabled:
+                    ball_src = "cv"
                     ball_det = self.ball_fallback.detect(
                         img, ball_tracker.predict(frame.index) or ball_tracker.last_xy)
-                ball_xy, ball_bridged = ball_tracker.update(frame.index, ball_det)
+                ball_xy, ball_bridged = ball_tracker.update(frame.index, ball_det, ball_src)
                 if frame.index % stride == 0 and det.persons:
                     poses = self.pose.estimate(img)
                     last_poses = _match_pose_to_track(poses, det.persons)

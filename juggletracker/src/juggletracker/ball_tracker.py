@@ -17,7 +17,8 @@ from typing import Optional, Tuple
 class BallTracker:
     def __init__(self, max_bridge_frames: int = 8, history: int = 4,
                  max_speed_px: float = 60.0, stuck_frames: int = 20,
-                 stuck_px: float = 8.0):
+                 stuck_px: float = 8.0, cv_max_frames: int = 25,
+                 cv_max_dist_px: float = 200.0):
         self.max_bridge = max(0, int(max_bridge_frames))
         self._pts: deque = deque(maxlen=max(2, history))
         self._last_frame: Optional[int] = None
@@ -30,6 +31,11 @@ class BallTracker:
         self.stuck_px = float(stuck_px)
         self._recent: deque = deque(maxlen=max(1, self.stuck_frames))
         self._anchor: Optional[Tuple[float, float]] = None
+        # Classical-fallback hits are only trusted near a recent YOLO detection;
+        # otherwise they chain onto background circles and drift (0 disables).
+        self.cv_max_frames = int(cv_max_frames)
+        self.cv_max_dist = float(cv_max_dist_px)
+        self._yolo: Optional[Tuple[int, float, float]] = None
 
     @property
     def last_xy(self) -> Optional[Tuple[float, float]]:
@@ -39,13 +45,20 @@ class BallTracker:
         return None
 
     def update(
-        self, frame_index: int, ball_xy: Optional[Tuple[float, float]]
+        self, frame_index: int, ball_xy: Optional[Tuple[float, float]],
+        source: str = "yolo",
     ) -> Tuple[Optional[Tuple[float, float]], bool]:
         """Feed one frame's ball detection (or None).
 
         Returns ``(xy, bridged)`` where ``xy`` is the real detection, a predicted
         position during a short gap (``bridged=True``), or ``None`` when the gap
         exceeds ``max_bridge_frames`` or there's no motion history yet."""
+        if ball_xy is not None and self.cv_max_frames > 0:
+            if source == "yolo":
+                self._yolo = (frame_index, float(ball_xy[0]), float(ball_xy[1]))
+            elif not self._cv_trusted(frame_index, ball_xy):
+                ball_xy = None
+
         if ball_xy is not None and self._is_stuck(ball_xy):
             # Forget motion history so the fallback doesn't keep re-latching here.
             self._pts.clear()
@@ -60,6 +73,13 @@ class BallTracker:
         # Ball missing this frame — bridge if we can.
         pred = self.predict(frame_index)
         return pred, pred is not None
+
+    def _cv_trusted(self, frame_index: int, xy: Tuple[float, float]) -> bool:
+        if self._yolo is None:
+            return False
+        f, x, y = self._yolo
+        return (frame_index - f <= self.cv_max_frames and
+                ((xy[0] - x) ** 2 + (xy[1] - y) ** 2) ** 0.5 <= self.cv_max_dist)
 
     def _is_stuck(self, xy: Tuple[float, float]) -> bool:
         if self.stuck_frames <= 0:

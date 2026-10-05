@@ -110,7 +110,7 @@ def test_processing_failure_rolls_back_partial_session(tmp_path, monkeypatch,
 
     clip_path = "clip_front_yard_event-1.mp4"
     if cancel:
-        def request_cancel(*_args):
+        def request_cancel(*_args, **_kwargs):
             pipeline._cancel_clip = os.path.basename(clip_path)
 
         error_type = ClipCancelled
