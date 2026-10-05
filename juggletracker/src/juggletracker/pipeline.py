@@ -21,6 +21,7 @@ from typing import Optional
 import cv2
 import numpy as np
 
+from .audio import RegisteredSounds, read_impact_times
 from .capture import FrameSource
 from .config import Config
 from .ball_tracker import BallTracker
@@ -236,6 +237,8 @@ class Pipeline:
             roi=self.cfg.roi,
             infer_long_edge=int(self.cfg.processing.get("infer_long_edge", 960)),
         )
+        sound_counter = (self._new_sound_counter(clip_path)
+                         if debug_video else RegisteredSounds([]))
         stride = max(1, int(self.cfg.processing.get("person_stride", 3)))
         # Filename format: clip_{camera}_{event_id}.mp4 (from the inbox bridge).
         # After counting, the event ID is used to query Frigate for a person label.
@@ -332,9 +335,11 @@ class Pipeline:
                     self._record(session_id, active_track, event, streaks, new_highs)
 
                 if debug_video:
+                    sound_count = sound_counter.update(frame.t)
                     writer = self._draw(
                         img, det, ball_xy, ball_bridged, kps, counter,
-                        active_track, writer, debug_video, ground_y=ground_y
+                        active_track, writer, debug_video, ground_y=ground_y,
+                        sound_count=sound_count,
                     )
 
             # Flush trailing streak.
@@ -483,7 +488,7 @@ class Pipeline:
             new_highs.append({"person": name, "score": event.count, "pid": pid})
 
     def _draw(self, img, det, ball_xy, ball_bridged, kps, counter, active_track,
-              writer, path, ground_y=None):
+              writer, path, ground_y=None, sound_count=0):
         vis = img.copy()
         h_img, w_img = vis.shape[:2]
         # ROI border — the analysis frame IS the ROI crop, so this hugs the edge
@@ -535,6 +540,7 @@ class Pipeline:
             (f"Left foot: {counter.current_left_count}", 0.55),
             (f"Right foot: {counter.current_right_count}", 0.55),
             (f"Head: {counter.current_header_count}", 0.55),
+            (f"Sounds: {sound_count}", 0.55),
         ]
         for index, (label, scale) in enumerate(overlay_lines):
             position = (10, 30 + index * 22)
@@ -549,6 +555,18 @@ class Pipeline:
             writer = _FfmpegH264Writer(path, w, h, fps=25.0)
         writer.write(vis)
         return writer
+
+    # ------------------------------------------------------------------
+    def _new_sound_counter(self, clip_path: str) -> RegisteredSounds:
+        settings = getattr(self.cfg, "raw", {}).get("audio", {})
+        if not bool(settings.get("enabled", True)):
+            return RegisteredSounds([])
+        events = read_impact_times(
+            clip_path,
+            threshold=float(settings.get("onset_threshold", 0.006)),
+            refractory_seconds=float(settings.get("refractory_seconds", 0.12)),
+        )
+        return RegisteredSounds(events)
 
     # ------------------------------------------------------------------
     def _new_ball_tracker(self) -> BallTracker:
@@ -598,6 +616,7 @@ class Pipeline:
         stride = max(1, int(self.cfg.processing.get("person_stride", 3)))
         writer = None
         counter: Optional[JuggleCounter] = None
+        sound_counter = self._new_sound_counter(clip_path)
         ball_tracker = self._new_ball_tracker()
         active_track: Optional[int] = None
         last_poses: dict[int, dict] = {}
@@ -628,9 +647,11 @@ class Pipeline:
                 ground_y = (float(active.xyxy[3]) + self._ground_margin
                             if active is not None else None)
                 counter.update(frame.index, ball_xy, kps, ground_y=ground_y)
+                sound_count = sound_counter.update(frame.t)
                 writer = self._draw(
                     img, det, ball_xy, ball_bridged, kps, counter,
-                    active_track, writer, out_path, ground_y=ground_y
+                    active_track, writer, out_path, ground_y=ground_y,
+                    sound_count=sound_count,
                 )
         finally:
             src.release()

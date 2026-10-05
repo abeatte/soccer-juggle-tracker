@@ -49,6 +49,13 @@ processing:
   torch_threads: 4 # was 6 - cooler, avoid throttle
   max_bridge_frames: 10 # (raise towards ~15 if dropouts are longer)
 
+audio:
+  enabled: true
+  # Raise to register fewer sounds; lower to register quieter impacts/noise.
+  onset_threshold: 0.006
+  # Merge closely spaced transient peaks into one registered sound.
+  refractory_seconds: 0.12
+
 models:
   # Ultralytics weights (downloaded by setup.sh into ./models).
   # Ultralytics auto-detects the format from the path.

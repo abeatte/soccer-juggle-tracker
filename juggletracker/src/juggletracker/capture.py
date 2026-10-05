@@ -24,7 +24,7 @@ import numpy as np
 
 
 def record_clip(rtsp_url: str, out_path: str, seconds: int) -> str:
-    """Record ``seconds`` from an RTSP stream to ``out_path`` via ffmpeg copy."""
+    """Record ``seconds`` of video and available audio via ffmpeg stream copy."""
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     cmd = [
         "ffmpeg",
@@ -33,7 +33,6 @@ def record_clip(rtsp_url: str, out_path: str, seconds: int) -> str:
         "-i", rtsp_url,
         "-t", str(seconds),
         "-c", "copy",
-        "-an",
         out_path,
     ]
     subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
