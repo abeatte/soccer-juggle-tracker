@@ -7,6 +7,7 @@ import os
 import queue
 import re
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -42,6 +43,9 @@ class InboxBridge:
         self.frigate_url = os.environ.get("FRIGATE_URL", "http://frigate:5000").rstrip("/")
         self.inbox_dir = os.environ.get("INBOX_DIR", "/inbox")
         self.event_label = os.environ.get("EVENT_LABEL", "person")
+        self.enabled_topic = os.environ.get(
+            "TRACKING_ENABLED_TOPIC", "juggle_tracker/tracking_enabled"
+        )
         self.cameras = {
             value.strip()
             for value in os.environ.get("CAMERA_FILTER", "").split(",")
@@ -56,15 +60,40 @@ class InboxBridge:
         self.retry_seconds = env_int("DOWNLOAD_RETRY_SECONDS", 5)
         self.events: queue.Queue[Event] = queue.Queue()
         self.seen: set[str] = set()
+        self.enabled = False
+        self._state_lock = threading.Lock()
 
     def on_connect(self, client, _userdata, _flags, reason_code, _properties=None) -> None:
         if getattr(reason_code, "is_failure", False):
             LOG.error("MQTT connection failed: %s", reason_code)
             return
-        client.subscribe(EVENT_TOPIC, qos=1)
-        LOG.info("Subscribed to %s", EVENT_TOPIC)
+        with self._state_lock:
+            self.enabled = False
+        client.subscribe(self.enabled_topic, qos=1)
+        LOG.info("Waiting for tracker state on %s", self.enabled_topic)
 
-    def on_message(self, _client, _userdata, message) -> None:
+    def on_message(self, client, _userdata, message) -> None:
+        if message.topic == self.enabled_topic:
+            enabled = message.payload.decode(errors="replace").strip().upper() in (
+                "ON", "1", "TRUE"
+            )
+            with self._state_lock:
+                changed = enabled != self.enabled
+                self.enabled = enabled
+            if not changed:
+                return
+            if enabled:
+                client.subscribe(EVENT_TOPIC, qos=1)
+                LOG.info("Juggle tracking enabled; subscribed to %s", EVENT_TOPIC)
+            else:
+                client.unsubscribe(EVENT_TOPIC)
+                self._discard_pending_events()
+                LOG.info("Juggle tracking disabled; unsubscribed from %s", EVENT_TOPIC)
+            return
+
+        with self._state_lock:
+            if not self.enabled:
+                return
         try:
             payload = json.loads(message.payload)
         except (UnicodeDecodeError, json.JSONDecodeError):
@@ -96,7 +125,18 @@ class InboxBridge:
         self.seen.add(event_id)
         self.events.put(Event(event_id=event_id, camera=camera))
 
+    def _discard_pending_events(self) -> None:
+        while True:
+            try:
+                event = self.events.get_nowait()
+            except queue.Empty:
+                return
+            self.seen.discard(event.event_id)
+
     def download_clip(self, event: Event) -> None:
+        with self._state_lock:
+            if not self.enabled:
+                return
         url = f"{self.frigate_url}/api/events/{event.event_id}/clip.mp4"
         headers = {"Accept": "video/mp4"}
 
@@ -109,6 +149,9 @@ class InboxBridge:
             return
 
         for attempt in range(1, self.retries + 1):
+            with self._state_lock:
+                if not self.enabled:
+                    return
             temporary = None
             try:
                 request = urllib.request.Request(url, headers=headers)
@@ -118,11 +161,22 @@ class InboxBridge:
                     ) as output:
                         temporary = output.name
                         while chunk := response.read(1024 * 1024):
+                            with self._state_lock:
+                                enabled = self.enabled
+                            if not enabled:
+                                break
                             output.write(chunk)
-                if os.path.getsize(temporary) == 0:
-                    raise RuntimeError("Frigate returned an empty clip")
-                os.replace(temporary, destination)
-                os.chmod(destination, 0o644)
+                with self._state_lock:
+                    enabled = self.enabled
+                    if enabled:
+                        if os.path.getsize(temporary) == 0:
+                            raise RuntimeError("Frigate returned an empty clip")
+                        os.replace(temporary, destination)
+                        os.chmod(destination, 0o644)
+                if not enabled:
+                    if temporary and os.path.exists(temporary):
+                        os.unlink(temporary)
+                    return
                 LOG.info("Exported Frigate event %s to %s", event.event_id, destination)
                 return
             except (OSError, urllib.error.URLError, urllib.error.HTTPError, RuntimeError) as exc:

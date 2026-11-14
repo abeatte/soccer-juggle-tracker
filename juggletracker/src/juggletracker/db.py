@@ -49,7 +49,28 @@ CREATE TABLE IF NOT EXISTS attempts (
     right_count INTEGER NOT NULL DEFAULT 0,
     header_count INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 """
+
+
+def load_setting(path: str, key: str, default: str) -> str:
+    """Read a persistent tracker setting without sharing a SQLite connection."""
+    with sqlite3.connect(path, timeout=5) as conn:
+        row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    return str(row[0]) if row else default
+
+
+def save_setting(path: str, key: str, value: str) -> None:
+    """Persist a tracker setting using a short-lived, thread-local connection."""
+    with sqlite3.connect(path, timeout=5) as conn:
+        conn.execute(
+            "INSERT INTO settings(key, value) VALUES (?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
+        )
 
 
 class Database:

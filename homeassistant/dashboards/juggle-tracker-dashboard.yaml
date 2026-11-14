@@ -76,7 +76,10 @@ sections:
         cards:
           - type: entities
             title: ⚙️ Processing Stats ⚙️
+            show_header_toggle: false
             entities:
+              - entity: switch.juggle_tracking_enabled
+                name: Juggle Tracking
               - type: custom:fold-entity-row
                 head:
                   entity: sensor.juggle_inbox_queue

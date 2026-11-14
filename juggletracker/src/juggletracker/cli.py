@@ -55,15 +55,30 @@ def _watch(args) -> int:
     print(f"Watching {inbox} for new clips (Ctrl-C to stop)...")
     pipe = Pipeline(cfg)
     pipe.ha.publish_queues()
+    last_tracking_enabled = None
+
+    def sync_tracking_status() -> None:
+        nonlocal last_tracking_enabled
+        current = bool(getattr(pipe.ha, "tracking_enabled", True))
+        if current == last_tracking_enabled:
+            return
+        pipe.ha.publish_status("idle" if current else "disabled", progress=0)
+        last_tracking_enabled = current
+
     try:
         while True:
+            sync_tracking_status()
             clips = []
             for ext in ("*.mp4", "*.mkv", "*.mov"):
                 clips += glob.glob(os.path.join(inbox, ext))
             for clip in sorted(clips):
+                if not getattr(pipe.ha, "tracking_enabled", True):
+                    break
                 # Wait until the file stops growing (finished recording).
                 if not _is_stable(clip):
                     continue
+                if not getattr(pipe.ha, "tracking_enabled", True):
+                    break
                 # Apply the global HA annotation setting to every clip, whether
                 # it arrived normally or was copied back for reprocessing.
                 marker = clip + ".annotate"
@@ -104,6 +119,7 @@ def _watch(args) -> int:
                     dst = move_to_failed(cfg, clip)
                     if dst:
                         print(f"   -> quarantined to {dst}", file=sys.stderr)
+            sync_tracking_status()
             # Refresh the inbox/processed queue sensors in HA each cycle.
             pipe.ha.publish_queues()
             time.sleep(args.interval)

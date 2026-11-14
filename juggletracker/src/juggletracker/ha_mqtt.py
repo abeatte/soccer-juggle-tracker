@@ -27,7 +27,7 @@ from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 from . import config as cfgmod
-from .db import Database, UNKNOWN_NAME
+from .db import Database, UNKNOWN_NAME, load_setting, save_setting
 
 try:
     import paho.mqtt.client as mqtt
@@ -100,6 +100,13 @@ class HAPublisher:
         self._faceid_enabled = bool(
             cfg.home_assistant.get("faceid_enabled", False)
         )
+        default_tracking = bool(cfg.capture.get("tracking_enabled_default", True))
+        stored_tracking = load_setting(
+            cfg.database.get("path", "data/juggle.db"),
+            "tracking_enabled",
+            "ON" if default_tracking else "OFF",
+        )
+        self.tracking_enabled = stored_tracking.upper() in ("ON", "1", "TRUE")
         self.client = None
         if not self.enabled:
             return
@@ -128,6 +135,8 @@ class HAPublisher:
         self.announce_status()
         self.announce_timing()
         self.publish_status("idle")
+        self.tracking_enabled_topic = f"{self.node}/tracking_enabled"
+        self.tracking_enabled_command_topic = f"{self.tracking_enabled_topic}/set"
         # Listen for "reset high score" button presses from HA. The button
         # publishes the target person's slug to this shared command topic.
         self.cmd_topic = f"{self.node}/reset/set"
@@ -136,6 +145,9 @@ class HAPublisher:
         self.apply_topic = f"{self.node}/apply/set"
         self.revert_topic = f"{self.node}/revert/set"
         self.client.on_message = self._on_message
+        self.client.subscribe(self.tracking_enabled_command_topic)
+        self.announce_tracking_switch()
+        self._publish_tracking_enabled()
         self.client.subscribe(self.cmd_topic)
         if self.calib_enabled:
             self.client.subscribe(f"{self.node}/config/+/set")
@@ -179,6 +191,34 @@ class HAPublisher:
             "model": "RLC-810A CV pipeline",
             "manufacturer": "DIY",
         }
+
+    def announce_tracking_switch(self) -> None:
+        """Publish the HA switch that gates only juggle event import/processing."""
+        if not self.enabled:
+            return
+        self.client.publish(
+            f"{self.prefix}/switch/{self.node}/tracking_enabled/config",
+            json.dumps({
+                "name": "Juggle Tracking Enabled",
+                "unique_id": f"{self.node}_tracking_enabled",
+                **self._eid("switch", "juggle_tracking_enabled"),
+                "state_topic": self.tracking_enabled_topic,
+                "command_topic": self.tracking_enabled_command_topic,
+                "payload_on": "ON",
+                "payload_off": "OFF",
+                "icon": "mdi:soccer",
+                "availability_topic": self.avail_topic,
+                "device": self._device(),
+            }), retain=True,
+        )
+
+    def _publish_tracking_enabled(self) -> None:
+        if self.enabled:
+            self.client.publish(
+                self.tracking_enabled_topic,
+                "ON" if self.tracking_enabled else "OFF",
+                retain=True,
+            )
 
     def _eid(self, component: str, key: str) -> dict:
         """Single source of truth for HA entity_ids: <component>.<prefix>_<key>.
@@ -281,6 +321,19 @@ class HAPublisher:
                 self.client.publish(
                     f"{self.node}/annotate_processed",
                     "ON" if self.annotate_processed else "OFF", retain=True)
+            elif topic == getattr(self, "tracking_enabled_command_topic", None):
+                self.tracking_enabled = payload.upper() in ("ON", "1", "TRUE")
+                save_setting(
+                    self.cfg.database.get("path", "data/juggle.db"),
+                    "tracking_enabled",
+                    "ON" if self.tracking_enabled else "OFF",
+                )
+                self._publish_tracking_enabled()
+                print(
+                    f"  [worker] juggle tracking "
+                    f"{'enabled' if self.tracking_enabled else 'disabled'}",
+                    flush=True,
+                )
             elif topic == self.delete_file_topic:
                 self._do_delete_inbox(payload)
             elif not self.calib_enabled:
